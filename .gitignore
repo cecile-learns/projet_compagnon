@@ -1,0 +1,38 @@
+# Environnements virtuels
+.venv/
+.cienv/
+
+# Fichiers techniques Python / Jupyter / système
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+Thumbs.db
+.DS_Store
+.env
+
+# Données : jamais dans Git (sources publiques, fichiers volumineux, sur le Drive)
+/data/*
+*.csv
+*.parquet
+*.xlsx
+*.xls
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+
+# Sorties produites par les scripts
+02_audit_eda/figures/
+
+# Exports et conversions
+*.docx
+*.pdf
+*.html
+*_files/
+
+# Fichiers techniques de Windows (téléchargements copiés dans WSL)
+*:Zone.Identifier
+
+# Exception : rapports finaux en PDF
+!/04_rapports/*.pdf
