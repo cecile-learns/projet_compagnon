@@ -10,6 +10,9 @@ Thumbs.db
 .DS_Store
 .env
 
+# Fichiers techniques de Windows (téléchargements copiés dans WSL)
+*:Zone.Identifier
+
 # Données : jamais dans Git (sources publiques, fichiers volumineux, sur le Drive)
 /data/*
 *.csv
@@ -30,9 +33,3 @@ Thumbs.db
 *.pdf
 *.html
 *_files/
-
-# Fichiers techniques de Windows (téléchargements copiés dans WSL)
-*:Zone.Identifier
-
-# Exception : rapports finaux en PDF
-!/04_rapports/*.pdf
