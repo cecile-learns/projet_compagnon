@@ -40,14 +40,12 @@ projet_compagnon/
 │   ├── audits.ipynb       ← audit de chaque source
 │   ├── eda.ipynb          ← analyse exploratoire : cible, relations, synthèse
 │   └── audits_eda.py      ← version script des deux notebooks
-├── 03_modelisation/       ← à venir
-└── 04_rapports/
-    ├── RENDU1_exploration_donnees.ipynb
-    ├── RENDU1_exploration_donnees.pdf
-    └── pieces_jointes/    ← images du rapport
+└── 03_modelisation/       ← à venir
 ```
 
 GitHub ne contient que du code. Les données sont sur un Google Drive partagé, lisible par toute personne ayant le lien : https://drive.google.com/drive/folders/1bVlZgMTxjtoWMveHXJEsxY6LPRo6U6nZ
+
+Les rapports (rédigés en Word, remis en PDF) sont tenus à part, sur le Google Drive de l'équipe.
 
 ## Installation
 
