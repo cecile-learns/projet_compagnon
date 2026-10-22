@@ -2368,7 +2368,7 @@ if "eda" in PARTIES:
     pop = pd.read_parquet(DATA_OUT / "dvf_plus_residentiel.parquet", columns=cols)
 
     # On ne garde que les années hors test
-    pop = pop[pop["anneemut"] <= 2023]
+    pop = pop[pop["anneemut"] <= 2024]
 
     print(pop.shape)
     print(round(pop.memory_usage(deep=True).sum() / 1e9, 2), "Go en mémoire")
@@ -2474,28 +2474,8 @@ if "eda" in PARTIES:
 
     # --- A2. Couverture de la cible et seuil de maille ---
 
-    # --- 1. Seuil de maille ---
-    afficher_section('1. Seuil de maille')
-    seuils = [1, 5, 10, 20, 30, 50]
-    total_ventes = cible["nb_ventes"].sum()
-    lignes = []
-
-    for s in seuils:
-        ok = cible["nb_ventes"] >= s
-        # Communes qui atteignent le seuil chacune des 10 années
-        annees_ok = ok.groupby(cible["code_commune"]).sum()
-        lignes.append({
-            "seuil": s,
-            "lignes gardées (%)": round(ok.mean() * 100, 1),
-            "ventes couvertes (%)": round(cible.loc[ok, "nb_ventes"].sum() / total_ventes * 100, 1),
-            "communes, au moins 1 an": cible.loc[ok, "code_commune"].nunique(),
-            "communes, 10 ans sur 10": (annees_ok == 10).sum(),
-        })
-
-    display(pd.DataFrame(lignes))
-
-    # --- Dispersion de la variation annuelle selon le nombre de ventes ---
-    afficher_section('Dispersion de la variation annuelle selon le nombre de ventes')
+    # --- 1. Dispersion de la variation annuelle selon le nombre de ventes ---
+    afficher_section('1. Dispersion de la variation annuelle selon le nombre de ventes')
     c = cible.sort_values(["code_commune", "annee"]).copy()
 
     # Valeurs de l'année précédente, pour la même commune
@@ -2525,6 +2505,94 @@ if "eda" in PARTIES:
     plt.ylabel("Variation annuelle du prix médian au m² (%)")
     plt.title("Variation annuelle du prix médian au m² selon le nombre de ventes")
     plt.show()
+
+    # --- 2. Ce que garde chaque seuil ---
+    afficher_section('2. Ce que garde chaque seuil')
+    seuils = [1, 5, 10, 20, 30, 50]
+    total_ventes = cible["nb_ventes"].sum()
+    n_annees = cible["annee"].nunique()   # nombre d'années étudiées (11 : de 2014 à 2024)
+    lignes = []
+
+    for s in seuils:
+        ok = cible["nb_ventes"] >= s
+        # Communes qui atteignent le seuil toutes les années
+        annees_ok = ok.groupby(cible["code_commune"]).sum()
+        lignes.append({
+            "seuil": s,
+            "lignes gardées (%)": round(ok.mean() * 100, 1),
+            "ventes couvertes (%)": round(cible.loc[ok, "nb_ventes"].sum() / total_ventes * 100, 1),
+            "communes, au moins 1 an": cible.loc[ok, "code_commune"].nunique(),
+            f"communes, {n_annees} ans sur {n_annees}": (annees_ok == n_annees).sum(),
+        })
+
+    display(pd.DataFrame(lignes))
+
+    # --- 3. Seuil par type de bien au bassin de vie ---
+    afficher_section('3. Seuil par type de bien au bassin de vie')
+    # Table de liaison commune -> bassin de vie (bloc 1 de la préparation)
+    liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet")
+
+    # Chaque vente reçoit son bassin de vie (seulement les colonnes utiles)
+    # Les arrondissements de Paris, Lyon et Marseille sont rattachés au bassin de leur ville
+    v = ventes[["l_codinsee", "anneemut", "type_bien", "prix_m2"]].merge(
+        liaison[["CODGEO_INI", "BV2022"]],
+        left_on="l_codinsee", right_on="CODGEO_INI", how="left", validate="many_to_one")
+    v["bassin"] = v["BV2022"]
+
+    # Prix médian et nombre de ventes par bassin x année x type de bien
+    b = (v.groupby(["bassin", "anneemut", "type_bien"])["prix_m2"]
+           .agg(nb_ventes="size", prix_m2_median="median")
+           .reset_index()
+           .sort_values(["bassin", "type_bien", "anneemut"]))
+
+    # Valeurs de l'année précédente, pour le même bassin et le même type de bien
+    groupe = b.groupby(["bassin", "type_bien"])
+    b["annee_prec"] = groupe["anneemut"].shift(1)
+    b["prix_prec"] = groupe["prix_m2_median"].shift(1)
+    b["nb_prec"] = groupe["nb_ventes"].shift(1)
+
+    # On ne garde que deux années qui se suivent (pas de trou dans la série)
+    b = b[b["anneemut"] - b["annee_prec"] == 1].copy()
+    b["variation"] = (b["prix_m2_median"] / b["prix_prec"] - 1) * 100
+
+    # Mêmes classes qu'au point 1
+    b["nb_min"] = b[["nb_ventes", "nb_prec"]].min(axis=1)
+    b["classe"] = pd.cut(b["nb_min"], bins=[0, 4, 9, 19, 29, 49, np.inf],
+                         labels=["1-4", "5-9", "10-19", "20-29", "30-49", "50+"])
+
+    # Un graphique par type de bien, même échelle verticale
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    for ax, t in zip(axes, ["maison", "appartement"]):
+        sns.boxplot(data=b[b["type_bien"] == t], x="classe", y="variation", showfliers=False, ax=ax)
+        ax.axhline(0, color="grey", lw=0.8)
+        ax.set_title(f"Bassins de vie : {t}s")
+        ax.set_xlabel("Nombre de ventes (le plus petit des deux années comparées)")
+    axes[0].set_ylabel("Variation annuelle du prix médian au m² (%)")
+    plt.tight_layout()
+    plt.show()
+
+    # Part des bassins et des ventes gardés selon le seuil, par type de bien
+    seuils = [1, 5, 10, 20, 30, 50]
+    tableaux = []
+
+    for t in ["maison", "appartement"]:
+        # Nombre de ventes par bassin x année, pour ce type de bien
+        n = v[v["type_bien"] == t].groupby(["bassin", "anneemut"]).size()
+        total_bassins = n.index.get_level_values("bassin").nunique()   # bassins avec au moins une vente
+        lignes = []
+        for s in seuils:
+            ok = n >= s
+            # bassins qui atteignent le seuil au moins une année
+            bassins_gardes = n[ok].index.get_level_values("bassin").nunique()
+            lignes.append({
+                "seuil": s,
+                "bassins gardés (%)": round(bassins_gardes / total_bassins * 100, 1),
+                "ventes gardées (%)": round(n[ok].sum() / n.sum() * 100, 1),
+            })
+        tableaux.append(pd.DataFrame(lignes).set_index("seuil"))
+
+    # Maisons et appartements côte à côte
+    display(pd.concat(tableaux, axis=1, keys=["maisons", "appartements"]))
 
     # =========================================================================
     # B. RELATIONS À L'INTÉRIEUR DE CHAQUE SOURCE
@@ -3327,7 +3395,7 @@ if "eda" in PARTIES:
     ax = deps.plot(column="prix_m2_median", cmap="viridis", legend=True, vmax=5000,
                    missing_kwds={"color": "lightgrey"}, figsize=(8, 8))
     ax.set_axis_off()
-    ax.set_title("Prix médian au m² par département (2014-2023)")
+    ax.set_title("Prix médian au m² par département (2014-2024)")
     plt.show()
 
     # Les 5 départements les plus chers et les 5 moins chers
@@ -3783,8 +3851,8 @@ if "eda" in PARTIES:
     # Prix médian par trimestre (calculé en C3.1), une colonne par type de bien
     prix_trim = trim.pivot(index="trimestre", columns="type_bien", values="prix_m2_median")
 
-    # Une ligne par trimestre, de 2014 à 2023
-    tp = prix_trim.join(taux_trim).loc["2014":"2023"]
+    # Une ligne par trimestre, de 2014 à 2024
+    tp = prix_trim.join(taux_trim).loc["2014":"2024"]
     print(len(tp), "trimestres")
 
     # Prix à gauche, taux à droite (second axe, car les unités sont différentes)
@@ -3848,7 +3916,24 @@ if "eda" in PARTIES:
 
     # --- C3.3 Prix au m², niveau de vie et taux des crédits ---
     afficher_section('C3.3 Prix au m², niveau de vie et taux des crédits')
-    # Taux de l'année N : moyenne de juillet N-1 à juin N (retard de 2 trimestres, vu en C4)
+    # C3.3 a besoin de la table cible jointe au niveau de vie (même construction qu'en C2.0).
+    # On la reconstruit ici pour pouvoir lancer C3.3 sans exécuter B1 et C2.
+    # Si la construction change en C2.0, la changer aussi ici.
+    cible_2021 = pd.read_parquet(DATA_OUT / "cible_commune_annee.parquet")
+    cible_2021 = cible_2021[cible_2021["annee"] <= 2021]          # Filosofi s'arrête en 2021
+
+    filo_c33 = pd.read_parquet(DATA_OUT / "filosofi_commune_2014_2021.parquet",
+                               columns=["code_commune", "annee", "niveau_vie_median"])
+    filo_c33 = filo_c33[~filo_c33["code_commune"].isin(["75056", "69123", "13055"])]   # comme en B1
+
+    # Jointure à gauche : on garde toutes les communes x années de la cible
+    fusion = cible_2021.merge(filo_c33, on=["code_commune", "annee"], how="left")
+
+    # "revenu trouvé" : la commune a un niveau de vie médian publié cette année-là
+    fusion["cas"] = np.where(fusion["niveau_vie_median"].notna(), "revenu trouvé", "pas de revenu")
+    print(fusion.shape, "|", (fusion["cas"] == "revenu trouvé").mean().round(3), "des lignes avec un revenu")
+
+    # Taux de l'année N : moyenne de juillet N-1 à juin N (retard de 2 trimestres, vu en C3.2)
     taux["annee"] = (taux["date"] + pd.DateOffset(months=6)).dt.year
     taux_an = taux.groupby("annee")["taux"].mean().rename("taux")
 
@@ -3926,8 +4011,8 @@ if "eda" in PARTIES:
     # Séparation train / test : 2025 est réservée au test, on ne la regarde PAS pour choisir les variables
     train = table[table["annee"] <= 2024].copy()
     print("Train (2014-2024) :", train.shape)
-    # Cibles : log du prix, seulement si au moins 5 ventes (médiane fiable)
-    SEUIL_VENTES = 5
+    # Cibles : log du prix, seulement si au moins 10 ventes (médiane fiable)
+    SEUIL_VENTES = 10
     train["log_prix_maison"] = np.where(train["n_maison"] >= SEUIL_VENTES, np.log(train["prix_m2_med_maison"]), np.nan)
     train["log_prix_appart"] = np.where(train["n_appart"] >= SEUIL_VENTES, np.log(train["prix_m2_med_appart"]), np.nan)
 
