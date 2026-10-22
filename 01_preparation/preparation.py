@@ -150,12 +150,13 @@ else:
 
 
 # =============================================================================
-# BLOC 3 - ÉCHANTILLON D'APPRENTISSAGE (2014-2023)
+# BLOC 3 - ÉCHANTILLON D'APPRENTISSAGE (2014-2024)
 # =============================================================================
 # Tirage stratifié : une strate = un département x une année.
 # 10 % des ventes de chaque strate, au moins 300 (sans dépasser la strate).
 # Poids w_h = N_h / n_h : l'échantillon n'est pas proportionnel,
 # toute statistique sur plusieurs départements ou années doit utiliser w_h.
+# 2025 est réservée au test : aucune vente de 2025 n'est tirée.
 
 # --- Nombre de ventes par strate (N_h) ---
 strates = (pd.read_parquet(fichier_pop, columns=["coddep", "anneemut"])
@@ -163,7 +164,7 @@ strates = (pd.read_parquet(fichier_pop, columns=["coddep", "anneemut"])
 
 # --- Nombre à tirer (n_h) et poids (w_h) par strate ---
 taux, plancher = 0.10, 300
-app = strates[strates["anneemut"] <= 2023].copy()
+app = strates[strates["anneemut"] <= 2024].copy()
 app["n_h"] = np.minimum(app["N_h"], np.maximum(plancher, np.round(app["N_h"] * taux))).astype(int)
 app["w_h"] = app["N_h"] / app["n_h"]
 
@@ -172,7 +173,7 @@ rng = np.random.default_rng(42)   # graine fixée : tirage reproductible
 morceaux = []
 for dep in sorted(app["coddep"].unique()):
     d = pd.read_parquet(fichier_pop, filters=[("coddep", "==", dep)])   # un département à la fois
-    d = d[d["anneemut"] <= 2023]
+    d = d[d["anneemut"] <= 2024]
     d = d.merge(app[["coddep", "anneemut", "n_h", "w_h"]], on=["coddep", "anneemut"])
     d["alea"] = rng.random(len(d))
     d["rang"] = d.groupby(["coddep", "anneemut"])["alea"].rank(method="first")
@@ -201,9 +202,11 @@ print("Bloc 3 - échantillon :", len(ech),
 # trimestre, année). Une ligne = une zone x une période, avec par type de bien
 # le nombre de ventes et le prix médian au m2 (recalculé à partir des ventes).
 # Toutes les ventes retenues, pas l'échantillon. Aucun seuil de ventes appliqué :
-# il sera choisi à la modélisation à partir de n_maison et n_appart.
-# Géographie constante : code commune 2026, arrondissements de Paris, Lyon et
-# Marseille séparés.
+# le seuil retenu (20 ventes par bassin, par année et par type de bien, EDA A2)
+# est appliqué à la modélisation, à partir de n_maison et n_appart.
+# Géographie constante : code commune 2026. Tables par commune : arrondissements
+# de Paris, Lyon et Marseille séparés. Tables par bassin de vie : arrondissements
+# rattachés au bassin de leur ville (par la table de liaison du bloc 1).
 
 # --- Population, colonnes utiles seulement ---
 colonnes = ["idmutation", "anneemut", "moismut", "l_codinsee", "libtypbien", "valeurfonc", "sbati"]
