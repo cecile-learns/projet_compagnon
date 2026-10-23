@@ -79,6 +79,12 @@ SOURCES = {
         "id": "106njCJVhPHHvHPVIXci3qFknIFOfccv6",
         "nom": "BV2022_2022_2026.xlsx",
     },
+    # Bassins de vie : fichier des années 2019 à 2022 (fichier Excel sur le Drive)
+    "bassins_vie_2019_2022": {
+        "type": "fichier",
+        "id": "1vY8O8tViuDknIhInExbKy-soHMcdyBvG",
+        "nom": "bassins_vie_2019_2022.xlsx",
+    },
     "passage_geo": {
         "type": "fichier",
         "id": "1o6_aOs4BBUNYjgeZGpglT27X3jJgVj7h",
@@ -166,7 +172,7 @@ if __name__ == "__main__":
     if not demandes:
         print("Sources disponibles :")
         for cle, source in SOURCES.items():
-            print(f"  {cle:<16} -> {source['nom']}")
+            print(f"  {cle:<22} -> {source['nom']}")
         print("\nExemple : python 00_telechargement/telechargement.py dvf taux")
         sys.exit(0)
 
