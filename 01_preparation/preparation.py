@@ -141,7 +141,7 @@ else:
     schema = pa.schema([(c, types[c]) for c in colonnes])
     with pq.ParquetWriter(fichier_pop, schema) as fichier_unique:
         for p in parquets_dep:
-            fichier_unique.write_table(pq.read_table(p).select(colonnes).cast(schema))
+            fichier_unique.write_table(pq.read_table(p, columns=colonnes).cast(schema))
     shutil.rmtree(dossier_dep)
 
     print("Bloc 2 - départements :", len(bilan),
@@ -344,7 +344,6 @@ print("Bloc 6 - communes :", len(menages_com),
 menages_com.to_parquet(DATA_OUT / "menages_commune_2022.parquet", index=False)
 
 # Base retravaillée pour inclure 2019 à 2022 en données brutes INSEE
-chemin_menages_2= (DATA_RAW)
 ANNEES = [2019, 2020, 2021, 2022]
 A_SUPPRIMER = ["IRIS", "TYP_IRIS", "MODIF_IRIS", "LAB_IRIS"]
 
@@ -373,7 +372,7 @@ for an in ANNEES:
 final = pd.concat(frames, ignore_index=True, sort=False)
 final = final.rename(columns={"COM": "code_commune"}).sort_values(["code_commune", "annee"]).reset_index(drop=True)
 
-liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", dtype=str)
+liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet")
 
 # Jointure à gauche sur le code commune
 res = final.merge(
@@ -472,8 +471,8 @@ for r in RATIOS:
     )
 
 df_bilan_bv = pd.DataFrame(bilan_bv)
-print(f"Total des bassins de vie analysés : {nb_total_bv}\n")
-print(df_bilan_bv.to_string(index=False))
+#print(f"Total des bassins de vie analysés : {nb_total_bv}\n")
+# print(df_bilan_bv.to_string(index=False))
 
 # le test démontre que la stabilité des indicateurs entre 2021 et 2022 confirme la pertinence de la réplication des données 2022 pour 2023
 
@@ -533,8 +532,8 @@ for r in RATIOS:
     )
 
 df_bilan_2ans = pd.DataFrame(bilan_2ans)
-print(f"Total des bassins de vie analysés : {nb_total_bv}\n")
-print(df_bilan_2ans.to_string(index=False))
+#print(f"Total des bassins de vie analysés : {nb_total_bv}\n")
+# print(df_bilan_2ans.to_string(index=False))
 
 #Choix d'une extrapolation lissée de 2022 à 2024
 # Isolation des données 2020 et 2022
@@ -572,7 +571,7 @@ r_2024["annee"] = 2024
 ratios_complets = pd.concat([ratios, r_2024.reset_index()], ignore_index=True)
 ratios_complets = ratios_complets.sort_values(["BV2022", "annee"]).reset_index(drop=True)
 
-fichier_final = dossier_sortie / "ratios_menages_bv_2019_2024.csv"
+fichier_final = DATA_OUT / "ratios_menages_bv_2019_2024.csv"
 
 ratios_complets.to_csv(fichier_final, sep=";", index=False, encoding="utf-8-sig", decimal=",")
 
