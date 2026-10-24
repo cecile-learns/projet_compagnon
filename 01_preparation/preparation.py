@@ -373,7 +373,7 @@ for an in ANNEES:
 final = pd.concat(frames, ignore_index=True, sort=False)
 final = final.rename(columns={"COM": "code_commune"}).sort_values(["code_commune", "annee"]).reset_index(drop=True)
 
-liaison = pd.read_csv(dossier / "communes_bv2022.csv", dtype=str)
+liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", dtype=str)
 
 # Jointure à gauche sur le code commune
 res = final.merge(
