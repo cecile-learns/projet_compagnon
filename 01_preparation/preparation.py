@@ -350,7 +350,7 @@ A_SUPPRIMER = ["IRIS", "TYP_IRIS", "MODIF_IRIS", "LAB_IRIS"]
 
 frames = []
 for an in ANNEES:
-    chemin = dossier / f"base-ic-couples-familles-menages-{an}.CSV"
+    chemin = DATA_RAW / "base-ic-couples-familles-menages-2022_csv" / f"base-ic-couples-familles-menages-{an}.CSV"
     df = pd.read_csv(chemin, sep=";", dtype={"IRIS": str, "COM": str}, low_memory=False)
 
     # Suppression des colonnes IRIS superflues
