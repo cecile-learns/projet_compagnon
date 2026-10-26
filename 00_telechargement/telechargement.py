@@ -59,11 +59,27 @@ SOURCES = {
         "id": "1QVGH4D5z5WjQHPlYuNGehSm91W4DAPKS",
         "nom": "Filo_disp_com",
     },
-    "menages": {
-        "type": "dossier",
-        "id": "1kK54R_QGx4TG22LZbgWoJeJCSH-euKEK",
-        "nom": "base-ic-couples-familles-menages-2022_csv",
+    "menages_2019": {
+        "type": "fichier",
+        "id": "1wIBXzENX7x-eLiRuueumSszFA35DR7Fl",
+        "nom": "base-ic-couples-familles-menages-2019.CSV",
     },
+    "menages_2020": {
+        "type": "fichier",
+        "id": "1kKwAwzc_rhxFgtCpMRfBMVOoPPfF_TsH",
+        "nom": "base-ic-couples-familles-menages-2020.CSV",
+    },
+    "menages_2021": {
+        "type": "fichier",
+        "id": "1C9RBwsNKQy4iQzepWbVlbTOL6z_Og5_k",
+        "nom": "base-ic-couples-familles-menages-2021.CSV",
+    },
+    "menages_2022": {
+        "type": "fichier",
+        "id": "1ZO7fCg5S9WVtW7YMc-v5hPY7maBNRdHM",
+        "nom": "base-ic-couples-familles-menages-2022.CSV",
+    },
+    
     "logement": {
         "type": "dossier",
         "id": "1iixzBgxre54KhwnzFuazFpRh2mJ7fCyc",
@@ -78,6 +94,12 @@ SOURCES = {
         "type": "fichier",
         "id": "106njCJVhPHHvHPVIXci3qFknIFOfccv6",
         "nom": "BV2022_2022_2026.xlsx",
+    },
+    # Bassins de vie : fichier des années 2019 à 2022 (fichier Excel sur le Drive)
+    "bassins_vie_2019_2022": {
+        "type": "fichier",
+        "id": "1vY8O8tViuDknIhInExbKy-soHMcdyBvG",
+        "nom": "bassins_vie_2019_2022.xlsx",
     },
     "passage_geo": {
         "type": "fichier",
@@ -166,7 +188,7 @@ if __name__ == "__main__":
     if not demandes:
         print("Sources disponibles :")
         for cle, source in SOURCES.items():
-            print(f"  {cle:<16} -> {source['nom']}")
+            print(f"  {cle:<22} -> {source['nom']}")
         print("\nExemple : python 00_telechargement/telechargement.py dvf taux")
         sys.exit(0)
 
