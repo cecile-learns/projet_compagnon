@@ -572,7 +572,7 @@ r_2024["annee"] = 2024
 ratios_complets = pd.concat([ratios, r_2024.reset_index()], ignore_index=True)
 ratios_complets = ratios_complets.sort_values(["BV2022", "annee"]).reset_index(drop=True)
 
-fichier_final = dossier_sortie / "ratios_menages_bv_2019_2024.csv"
+fichier_final = DATA_OUT / "ratios_menages_bv_2019_2024.csv"
 
 ratios_complets.to_csv(fichier_final, sep=";", index=False, encoding="utf-8-sig", decimal=",")
 
