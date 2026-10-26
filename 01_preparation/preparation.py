@@ -38,24 +38,35 @@ fichier_bv = DATA_RAW / "BV2022_2022_2026.xlsx"
 compo = pd.read_excel(fichier_bv, sheet_name="Composition_communale", skiprows=5, dtype=str)
 bassins = pd.read_excel(fichier_bv, sheet_name="BV2022", skiprows=5, dtype=str)
 
-# --- Ajout des arrondissements, rattachés au code de leur ville ---
+# --- Communes scindées : filtrage sur la table de passage initiale ---
+scindee = passage["CODGEO_INI"].duplicated(keep=False)
+identite = passage["CODGEO_INI"] == passage["CODGEO_2026"]
+cas_52427 = (passage["CODGEO_INI"] == "52427") & (
+    passage["CODGEO_2026"] == "52331"
+)
+passage = passage[~scindee | identite | cas_52427]
+
+# --- Ajout des arrondissements (correction de la borne sup pour Lyon) ---
 villes = {
-    "75056": ("Paris", range(75101, 75121)),
-    "69123": ("Lyon", range(69381, 69390)),
-    "13055": ("Marseille", range(13201, 13217)),
+    "75056": ("Paris", range(75101, 75121)),  # 75101 à 75120
+    "69123": ("Lyon", range(69381, 69391)),  # 69381 à 69390
+    "13055": ("Marseille", range(13201, 13217)),  # 13201 à 13216
 }
+
 lignes = []
 for code_ville, (nom, arrondissements) in villes.items():
     for code_arr in arrondissements:
-        lignes.append({"CODGEO_INI": str(code_arr), "CODGEO_2026": code_ville, "LIBGEO_2026": nom})
-passage = pd.concat([passage, pd.DataFrame(lignes)], ignore_index=True)
+        lignes.append({
+            "CODGEO_INI": str(code_arr),
+            "CODGEO_2026": code_ville,
+            "LIBGEO_2026": nom,
+        })
 
-# --- Communes scindées : une seule ligne par code ---
-# On garde la ligne où le code pointe vers lui-même ; 52427 -> 52331 (seul cas sans ligne identité)
-scindee = passage["CODGEO_INI"].duplicated(keep=False)
-identite = passage["CODGEO_INI"] == passage["CODGEO_2026"]
-cas_52427 = (passage["CODGEO_INI"] == "52427") & (passage["CODGEO_2026"] == "52331")
-passage = passage[~scindee | identite | cas_52427]
+df_arrondissements = pd.DataFrame(lignes)
+
+# Sécurité : on évite les doublons si les arrondissements existent déjà dans passage
+passage = passage[~passage["CODGEO_INI"].isin(df_arrondissements["CODGEO_INI"])]
+passage = pd.concat([passage, df_arrondissements], ignore_index=True)
 
 # --- Ajout du bassin de vie et de sa description ---
 liaison = passage.merge(compo[["CODGEO", "BV2022"]], left_on="CODGEO_2026", right_on="CODGEO",
