@@ -59,27 +59,12 @@ SOURCES = {
         "id": "1QVGH4D5z5WjQHPlYuNGehSm91W4DAPKS",
         "nom": "Filo_disp_com",
     },
-    "menages_2019": {
-        "type": "fichier",
-        "id": "1wIBXzENX7x-eLiRuueumSszFA35DR7Fl",
-        "nom": "base-ic-couples-familles-menages-2019.CSV",
+    # Recensement, couples-familles-ménages : millésimes 2019 à 2022 et fichier de métadonnées
+    "menages": {
+        "type": "dossier",
+        "id": "1kK54R_QGx4TG22LZbgWoJeJCSH-euKEK",
+        "nom": "base-ic-couples-familles-menages-2022_csv",
     },
-    "menages_2020": {
-        "type": "fichier",
-        "id": "1kKwAwzc_rhxFgtCpMRfBMVOoPPfF_TsH",
-        "nom": "base-ic-couples-familles-menages-2020.CSV",
-    },
-    "menages_2021": {
-        "type": "fichier",
-        "id": "1C9RBwsNKQy4iQzepWbVlbTOL6z_Og5_k",
-        "nom": "base-ic-couples-familles-menages-2021.CSV",
-    },
-    "menages_2022": {
-        "type": "fichier",
-        "id": "1ZO7fCg5S9WVtW7YMc-v5hPY7maBNRdHM",
-        "nom": "base-ic-couples-familles-menages-2022.CSV",
-    },
-    
     "logement": {
         "type": "dossier",
         "id": "1iixzBgxre54KhwnzFuazFpRh2mJ7fCyc",

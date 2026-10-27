@@ -309,12 +309,19 @@ filo.to_parquet(DATA_OUT / "filosofi_commune_2014_2021.parquet", index=False)
 
 
 # =============================================================================
-# BLOC 6 - MÉNAGES : STRUCTURE DES MÉNAGES PAR COMMUNE (RECENSEMENT 2022)
+# BLOC 6 - MÉNAGES : STRUCTURE DES MÉNAGES (RECENSEMENT)
 # =============================================================================
+# Deux tables, deux conventions de calcul ; le choix entre les deux est fait au
+# feature engineering.
+#  - Partie 1 : par commune, recensement 2022. Ratios entre 0 et 1, tous
+#    rapportés au nombre de ménages.
+#  - Partie 2 : par bassin de vie, recensements 2019 à 2022 prolongés à 2024.
+#    Ratios en %, parts familiales rapportées au nombre de familles ;
+#    suffixe _pct_men (pour 100 ménages) ou _pct_fam (pour 100 familles).
 # Base IRIS additionnée par commune (Paris, Lyon, Marseille par arrondissement).
 # On additionne les effectifs puis on divise, jamais de moyenne des ratios.
-# Effectifs bruts conservés pour recalculer les ratios au bassin de vie.
-# Ratios entre 0 et 1 ; vides pour une commune sans ménage.
+
+# --- Partie 1 : par commune, recensement 2022 ---
 
 # --- Lecture, codes en texte ---
 chemin_menages = (DATA_RAW / "base-ic-couples-familles-menages-2022_csv"
@@ -343,238 +350,87 @@ print("Bloc 6 - communes :", len(menages_com),
       "| communes sans ménage :", men.isna().sum())
 menages_com.to_parquet(DATA_OUT / "menages_commune_2022.parquet", index=False)
 
-# Base retravaillée pour inclure 2019 à 2022 en données brutes INSEE
-chemin_menages_2= (DATA_RAW)
-ANNEES = [2019, 2020, 2021, 2022]
-A_SUPPRIMER = ["IRIS", "TYP_IRIS", "MODIF_IRIS", "LAB_IRIS"]
+# --- Partie 2 : par bassin de vie, 2019 à 2024 ---
+# 2023 : copie de 2022 (pas encore de recensement publié).
+# 2024 : 2022 + évolution 2020-2022, bornée pour éviter les valeurs extrêmes.
+# Les tests de stabilité qui justifient ces deux choix sont dans le notebook.
+ANNEES_RP = [2019, 2020, 2021, 2022]
+dossier_menages = DATA_RAW / "base-ic-couples-familles-menages-2022_csv"
+EFFECTIFS_BV = ["C_MEN", "C_MENPSEUL", "C_PMEN", "C_FAM",
+                "C_FAMMONO", "C_COUPSENF", "C_NE24F3", "C_NE24F4P"]
 
-frames = []
-for an in ANNEES:
-    chemin = DATA_RAW / "base-ic-couples-familles-menages-2022_csv" / f"base-ic-couples-familles-menages-{an}.CSV"
-    df = pd.read_csv(chemin, sep=";", dtype={"IRIS": str, "COM": str}, low_memory=False)
+# --- Lecture de chaque millésime, année retirée des noms (C19_MEN -> C_MEN), somme par commune ---
+morceaux = []
+for an in ANNEES_RP:
+    df = pd.read_csv(dossier_menages / f"base-ic-couples-familles-menages-{an}.CSV",
+                     sep=";", dtype={"IRIS": str, "COM": str}, low_memory=False)
+    df.columns = [re.sub(rf"^([CP]){str(an)[2:]}_", r"\1_", c) for c in df.columns]
+    com_an = df.groupby("COM", as_index=False)[EFFECTIFS_BV].sum(min_count=1)
+    com_an["annee"] = an
+    morceaux.append(com_an)
+menages_com_an = pd.concat(morceaux, ignore_index=True)
 
-    # Suppression des colonnes IRIS superflues
-    df = df.drop(columns=[c for c in A_SUPPRIMER if c in df.columns])
-
-    # Normalisation des noms de colonnes (suppression des suffixes d'année C19_ -> C_)
-    suffixe = str(an)[2:]
-    df.columns = [re.sub(rf"^([CP]){suffixe}_", r"\1_", c) for c in df.columns]
-
-    # Conservation uniquement des colonnes numériques + le code commune COM
-    cols_num = df.select_dtypes(include="number").columns.tolist()
-    
-    # Agrégation par commune
-    communes = df.groupby("COM", as_index=False)[cols_num].sum(min_count=1)
-    communes.insert(1, "annee", an)
-    frames.append(communes)
-    print(f"{an}: {len(df)} IRIS -> {len(communes)} communes")
-
-# Concaténation de toutes les années
-final = pd.concat(frames, ignore_index=True, sort=False)
-final = final.rename(columns={"COM": "code_commune"}).sort_values(["code_commune", "annee"]).reset_index(drop=True)
-
-liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", dtype=str)
-
-# Jointure à gauche sur le code commune
-res = final.merge(
-    liaison, 
-    how="left", 
-    left_on="code_commune", 
-    right_on="CODGEO_INI"
-).drop(columns=["CODGEO_INI"])
-
-# Nettoyage et filtrage des communes sans bassin de vie attribué
+# --- Rattachement au bassin de vie (table du bloc 1) ---
+liaison_bv = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet",
+                             columns=["CODGEO_INI", "BV2022", "TYPE_BV2022"])
+res = menages_com_an.merge(liaison_bv, left_on="COM", right_on="CODGEO_INI",
+                           how="left", validate="many_to_one")
+print("Bloc 6 (bassins) - lignes commune x année sans bassin, retirées :", res["BV2022"].isna().sum())
 res = res.dropna(subset=["BV2022"])
-print(f"Lignes après jointure BV : {len(res)} | Sans BV : {res['BV2022'].isna().sum()}")
 
-#Calcul des ratios par bassin de vie
-COLS = [
-    "C_MEN", "C_MENPSEUL", "C_PMEN", "C_FAM", 
-    "C_FAMMONO", "C_COUPSENF", "C_NE24F3", "C_NE24F4P"
-]
+# --- Somme par bassin et par année ---
+bv = res.groupby(["BV2022", "TYPE_BV2022", "annee"], as_index=False, dropna=False).agg(
+    nb_communes=("COM", "size"), **{c: (c, "sum") for c in EFFECTIFS_BV})
 
-# Agrégation par bassin de vie et par année
-g = res.groupby(["BV2022", "annee"])
-bv = g[COLS].sum().reset_index()
-bv.insert(2, "nb_communes", g.size().values)
 
-# Conditions de garde pour éviter la division par zéro
-men_ok = bv["C_MEN"] > 0
-fam_ok = men_ok & (bv["C_FAM"] > 0)
+# --- Ratios (vides si le dénominateur vaut 0) ---
+def part_pct(numerateur, denominateur):
+    """Part en % ; vide si le dénominateur vaut 0."""
+    return numerateur / denominateur.where(denominateur > 0) * 100
 
-def ratio(num, den, garde, x100=True):
-    out = num / den.where(den > 0)
-    return np.where(garde, out * (100 if x100 else 1), np.nan)
 
-# Calcul des ratios
-bv["taux_personnes_seules"]    = ratio(bv["C_MENPSEUL"], bv["C_MEN"], men_ok)
-bv["part_familles_monoparent"] = ratio(bv["C_FAMMONO"], bv["C_FAM"], fam_ok)
-bv["part_familles_nombreuses"] = ratio(bv["C_NE24F3"] + bv["C_NE24F4P"], bv["C_FAM"], fam_ok)
-bv["taille_moyenne_menages"]   = ratio(bv["C_PMEN"], bv["C_MEN"], men_ok, x100=False)
-bv["part_couples_sans_enfant"] = ratio(bv["C_COUPSENF"], bv["C_FAM"], fam_ok)
+bv["taux_personnes_seules_pct_men"] = part_pct(bv["C_MENPSEUL"], bv["C_MEN"])
+bv["part_familles_monoparentales_pct_fam"] = part_pct(bv["C_FAMMONO"], bv["C_FAM"])
+bv["part_familles_nombreuses_pct_fam"] = part_pct(bv["C_NE24F3"] + bv["C_NE24F4P"], bv["C_FAM"])
+bv["part_couples_sans_enfants_pct_fam"] = part_pct(bv["C_COUPSENF"], bv["C_FAM"])
+bv["taille_moyenne_menage"] = bv["C_PMEN"] / bv["C_MEN"].where(bv["C_MEN"] > 0)
+RATIOS_BV = ["taux_personnes_seules_pct_men", "part_familles_monoparentales_pct_fam",
+             "part_familles_nombreuses_pct_fam", "part_couples_sans_enfants_pct_fam",
+             "taille_moyenne_menage"]
+bv[RATIOS_BV] = bv[RATIOS_BV].round(2)
 
-RATIOS = [
-    "taux_personnes_seules", "part_familles_monoparent", 
-    "part_familles_nombreuses", "taille_moyenne_menages", 
-    "part_couples_sans_enfant"
-]
+# --- 2023 : copie de 2022 ---
+an_2023 = bv[bv["annee"] == 2022].assign(annee=2023)
 
-# Formatage final en rettrapant les infos sur les BV
-infos_bv=liaison[["CODGEO_INI", "CODGEO_2026","BV2022","TYPE_BV2022"]]
-bv = bv.merge(infos_bv, on="BV2022", how="left")
-cols_finales = ["CODGEO_INI", "CODGEO_2026","BV2022","TYPE_BV2022", "annee", "nb_communes", "C_MEN", "C_FAM"] + RATIOS
-ratios = bv[cols_finales].round({"C_MEN": 0, "C_FAM": 0, **{r: 2 for r in RATIOS}})
-
-# Test d'évolution 2021 à 2022
-# Restriction aux années 2021 et 2022
-df_21_22 = ratios[ratios["annee"].isin([2021, 2022])]
-
-# 1. Pivotement pour avoir 2021 et 2022 côte à côte par BV
-df_21_22 = ratios[ratios["annee"].isin([2021, 2022])].dropna(subset=["BV2022"])
-pivot = df_21_22.drop_duplicates(subset=["BV2022", "annee"]).pivot(
-    index="BV2022", columns="annee"
-)
-
-# 2. Seuils de significativité pratique (à ajuster selon tes critères)
-SEUILS = {
-    "taux_personnes_seules": 1.5,  # 1 point de %
-    "part_familles_monoparent": 1.5,  # 1 point de %
-    "part_familles_nombreuses": 1.0,  # 1 point de %
-    "taille_moyenne_menages": 0.02,  # 0.05 personne/ménage
-    "part_couples_sans_enfant": 1.5,  # 1 point de %
-}
-
-bilan_bv = []
-nb_total_bv = len(pivot)
-
-for r in RATIOS:
-    s_2021 = pivot[r][2021]
-    s_2022 = pivot[r][2022]
-
-    # Variation absolue (|2022 - 2021|)
-    diff_abs = (s_2022 - s_2021).abs()
-    seuil = SEUILS[r]
-
-    # Nombre et % de BV où la différence dépasse le seuil
-    bv_depassant = (diff_abs > seuil).sum()
-    pct_depassant = (bv_depassant / nb_total_bv) * 100
-
-    bilan_bv.append(
-        {
-            "Ratio": r,
-            "Seuil critique": f"> {seuil} pt" if "part" in r or "taux" in r else f"> {seuil} pers.",
-            "Écart Max observé": diff_abs.max().round(2),
-            "Écart Médian": diff_abs.median().round(3),
-            "Nb BV > Seuil": bv_depassant,
-            "% BV avec écart significatif": round(pct_depassant, 2),
-            "% BV stables (duplication valide)": round(100 - pct_depassant, 2),
-        }
-    )
-
-df_bilan_bv = pd.DataFrame(bilan_bv)
-print(f"Total des bassins de vie analysés : {nb_total_bv}\n")
-print(df_bilan_bv.to_string(index=False))
-
-# le test démontre que la stabilité des indicateurs entre 2021 et 2022 confirme la pertinence de la réplication des données 2022 pour 2023
-
-#Dupplication de 2022 à 2023
-# Isoler les données de 2022
-ratios_2022 = ratios[ratios["annee"] == 2022].copy()
-
-# Remplacer la valeur de la colonne annee par 2023
-ratios_2022["annee"] = 2023
-
-# Empiler avec le DataFrame d'origine
-ratios = pd.concat([ratios, ratios_2022], ignore_index=True)
-
-# Trier le résultat
-ratios = ratios.sort_values(["BV2022", "annee"]).reset_index(drop=True)
-
-# Analyse sur l'évolution sur 2ans par bassin de vie
-# 1. Pivotement pour aligner 2020 et 2022
-df_20_22 = ratios[ratios["annee"].isin([2020, 2022])].dropna(subset=["BV2022"])
-pivot_2ans = df_20_22.drop_duplicates(subset=["BV2022", "annee"]).pivot(
-    index="BV2022", columns="annee"
-)
-
-# 2. Seuils adaptés pour une fenêtre de 2 ans
-SEUILS_2ANS = {
-    "taux_personnes_seules": 2.0,       # 2 points de %
-    "part_familles_monoparent": 2.0,   # 2 points de %
-    "part_familles_nombreuses": 1.5,   # 1.5 point de %
-    "taille_moyenne_menages": 0.03,    # 0.03 pers./ménage
-    "part_couples_sans_enfant": 2.0,   # 2 points de %
-}
-
-bilan_2ans = []
-nb_total_bv = len(pivot_2ans)
-
-for r in RATIOS:
-    s_2020 = pivot_2ans[r][2020]
-    s_2022 = pivot_2ans[r][2022]
-
-    # Variation absolue sur 2 ans (|2022 - 2020|)
-    diff_abs = (s_2022 - s_2020).abs()
-    seuil = SEUILS_2ANS[r]
-
-    bv_depassant = (diff_abs > seuil).sum()
-    pct_depassant = (bv_depassant / nb_total_bv) * 100
-
-    bilan_2ans.append(
-        {
-            "Ratio": r,
-            "Seuil critique (2 ans)": f"> {seuil} pt" if "part" in r or "taux" in r else f"> {seuil} pers.",
-            "Écart Max (2020-2022)": diff_abs.max().round(2),
-            "Écart Médian (2020-2022)": diff_abs.median().round(3),
-            "Nb BV > Seuil": bv_depassant,
-            "% BV avec écart significatif": round(pct_depassant, 2),
-            "% BV stables (duplication 2 ans valide)": round(100 - pct_depassant, 2),
-        }
-    )
-
-df_bilan_2ans = pd.DataFrame(bilan_2ans)
-print(f"Total des bassins de vie analysés : {nb_total_bv}\n")
-print(df_bilan_2ans.to_string(index=False))
-
-#Choix d'une extrapolation lissée de 2022 à 2024
-# Isolation des données 2020 et 2022
-r_2020 = ratios[ratios["annee"] == 2020].set_index("BV2022")
-r_2022 = ratios[ratios["annee"] == 2022].set_index("BV2022")
-
-# Alignement des bassins de vie communs
-bv_communs = r_2022.index.intersection(r_2020.index)
-r_2020 = r_2020.loc[bv_communs]
-r_2022 = r_2022.loc[bv_communs]
-
-# Calcul du delta sur 2 ans (2020-2022)
-deltas = r_2022[RATIOS] - r_2020[RATIOS]
-
-# Application des bornes de sécurité (clipping)
+# --- 2024 : 2022 + évolution 2020-2022, bornée (en points de %, en personnes pour la taille) ---
 BORNES = {
-    "taux_personnes_seules": 1.5,
-    "part_familles_monoparent": 1.5,
-    "part_familles_nombreuses": 1.0,
-    "taille_moyenne_menages": 0.03,
-    "part_couples_sans_enfant": 1.5,
+    "taux_personnes_seules_pct_men": 1.5,
+    "part_familles_monoparentales_pct_fam": 1.5,
+    "part_familles_nombreuses_pct_fam": 1.0,
+    "part_couples_sans_enfants_pct_fam": 1.5,
+    "taille_moyenne_menage": 0.03,
 }
+r_2020 = bv[bv["annee"] == 2020].set_index("BV2022")
+r_2022 = bv[bv["annee"] == 2022].set_index("BV2022")
+communs = r_2022.index.intersection(r_2020.index)
+evolution = r_2022.loc[communs, RATIOS_BV] - r_2020.loc[communs, RATIOS_BV]
+for col, borne in BORNES.items():
+    evolution[col] = evolution[col].clip(lower=-borne, upper=borne)
+an_2024 = r_2022.loc[communs].copy()
+an_2024[RATIOS_BV] = (an_2024[RATIOS_BV] + evolution).round(2)
+an_2024["annee"] = 2024
+an_2024 = an_2024.reset_index()
 
-deltas_bornes = deltas.copy()
-for col, lim in BORNES.items():
-    deltas_bornes[col] = deltas_bornes[col].clip(lower=-lim, upper=lim)
+# --- Table finale, contrôles et enregistrement ---
+colonnes_bv = ["BV2022", "TYPE_BV2022", "annee", "nb_communes", "C_MEN", "C_FAM"] + RATIOS_BV
+menages_bv = pd.concat([bv, an_2023, an_2024], ignore_index=True)[colonnes_bv]
+menages_bv = menages_bv.sort_values(["BV2022", "annee"]).reset_index(drop=True)
+print("Bloc 6 (bassins) - lignes :", len(menages_bv),
+      "| bassins :", menages_bv["BV2022"].nunique(),
+      "| un bassin x année = une ligne :", not menages_bv.duplicated(["BV2022", "annee"]).any(),
+      "| bassins sans 2024 :", menages_bv["BV2022"].nunique() - len(an_2024))
+menages_bv.to_parquet(DATA_OUT / "menages_bv_2019_2024.parquet", index=False)
 
-# Construction de la table 2024
-r_2024 = r_2022.copy()
-r_2024[RATIOS] = (r_2022[RATIOS] + deltas_bornes).round(2)
-r_2024["annee"] = 2024
-
-
-# Reconstitution table finale complète
-ratios_complets = pd.concat([ratios, r_2024.reset_index()], ignore_index=True)
-ratios_complets = ratios_complets.sort_values(["BV2022", "annee"]).reset_index(drop=True)
-
-fichier_final = DATA_OUT / "ratios_menages_bv_2019_2024.csv"
-
-ratios_complets.to_csv(fichier_final, sep=";", index=False, encoding="utf-8-sig", decimal=",")
 
 # =============================================================================
 # BLOC 7 - PARC DE LOGEMENT PAR COMMUNE (RECENSEMENT 2022)
