@@ -81,6 +81,153 @@ print("Bloc 1 - lignes :", len(liaison),
 liaison.to_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", index=False)
 
 
+# SCINDAGE DES GROS BASSINS DE VIE HETEROGENES
+
+#1. Chargement et préparation des communes 2026
+df_communes = pd.read_csv(DATA_RAW / "communes-france-2026.csv",
+    dtype={'code_insee': str, 'code_bassin_de_vie': str, 'grille_densite': int})
+
+# Harmonisation du code INSEE sur 5 caractères
+df_communes['code_insee'] = df_communes['code_insee'].str.zfill(5)
+
+# Calcul de la population totale par bassin de vie
+df_communes['pop_bv_totale'] = df_communes.groupby('code_bassin_de_vie')['population'].transform('sum')
+
+# Attribution vectorisée des sous-bassins
+conditions = [
+    df_communes['pop_bv_totale'] < 100000,
+    df_communes['grille_densite'].isin([1, 2]),
+    df_communes['grille_densite'].isin([3, 4]),
+]
+choix = [
+    df_communes['code_bassin_de_vie'],
+    df_communes['code_bassin_de_vie'] + '_1',
+    df_communes['code_bassin_de_vie'] + '_2',
+]
+
+df_communes['sous_bassin_de_vie'] = np.select(
+    conditions, choix, default=df_communes['code_bassin_de_vie'] + '_3'
+)
+
+# 2. Traitement des arrondissements de Paris, Lyon, Marseille
+pop_arrondissements = {
+    # Paris (75101 à 75120)
+    '75101': 15919,
+    '75102': 21130,
+    '75103': 34120,
+    '75104': 28088,
+    '75105': 57380,
+    '75106': 39625,
+    '75107': 47970,
+    '75108': 35190,
+    '75109': 59250,
+    '75110': 83450,
+    '75111': 142500,
+    '75112': 140100,
+    '75113': 177800,
+    '75114': 133400,
+    '75115': 227700,
+    '75116': 162200,
+    '75117': 163900,
+    '75118': 188500,
+    '75119': 181600,
+    '75120': 189800,
+    # Lyon (69381 à 69389)
+    '69381': 29500,
+    '69382': 30900,
+    '69383': 101700,
+    '69384': 35700,
+    '69385': 48800,
+    '69386': 52100,
+    '69387': 82600,
+    '69388': 86300,
+    '69389': 51500,
+    # Marseille (13201 à 13216)
+    '13201': 39500,
+    '13202': 23600,
+    '13203': 45100,
+    '13204': 49100,
+    '13205': 45800,
+    '13206': 42700,
+    '13207': 34800,
+    '13208': 82100,
+    '13209': 76400,
+    '13210': 56500,
+    '13211': 57300,
+    '13212': 61200,
+    '13213': 92300,
+    '13214': 61800,
+    '13215': 79400,
+    '13216': 38400,
+}
+
+# Mapping Arrondissement -> Commune Parente
+parent_map = {}
+for code in pop_arrondissements:
+    if code.startswith('751'):
+        parent_map[code] = '75056'
+    elif code.startswith('6938'):
+        parent_map[code] = '69123'
+    elif code.startswith('132'):
+        parent_map[code] = '13055'
+
+lignes_arrondissements = []
+for code_arm, pop_arm in pop_arrondissements.items():
+    code_parent = parent_map[code_arm]
+    parent_matches = df_communes[df_communes['code_insee'] == code_parent]
+
+    if not parent_matches.empty:
+        parent_row = parent_matches.iloc[0].copy()
+        parent_row['code_insee'] = code_arm
+
+        if 'nom_standard' in parent_row:
+            parent_row['nom_standard'] = (
+                f"{parent_row['nom_standard']} Arrondissement {code_arm[-2:]}"
+            )
+
+        parent_row['population'] = pop_arm
+        # Le sous-bassin de l'arrondissement prend son propre code INSEE
+        parent_row['sous_bassin_de_vie'] = code_arm
+        lignes_arrondissements.append(parent_row)
+
+df_bv_scindes = pd.concat(
+    [df_communes, pd.DataFrame(lignes_arrondissements)], ignore_index=True
+)
+
+# 3. Jointure avec la liaison avec les communes
+df_liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", dtype=str
+)
+
+#Clé qui permet de garder le code arrondissement quand c'en est un
+arrondissement = df_liaison["CODGEO_INI"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
+df_liaison["code_jointure"] = df_liaison["CODGEO_2026"].where(~arrondissement, df_liaison["CODGEO_INI"])
+
+# Formater les codes INSEE sur 5 caractères
+df_liaison['CODGEO_2026'] = df_liaison['CODGEO_2026'].str.zfill(5)
+df_bv_scindes['code_insee_clean'] = df_bv_scindes['code_insee'].str.zfill(5)
+
+# Fusion : liaison de l'ancien/actuel code vers le référentiel 2026 via CODGEO_2026
+df_merged = pd.merge(
+    df_liaison,
+    df_bv_scindes[
+        ['code_insee_clean', 'sous_bassin_de_vie', 'pop_bv_totale']
+    ].drop_duplicates(),
+    left_on='code_jointure',
+    right_on='code_insee_clean',
+    how='left', validate="many_to_one"
+)
+
+# Nettoyage des colonnes
+df_merged.drop(columns=['code_insee_clean','LIBGEO_2026','LIBBV2022', 'code_jointure'], inplace=True)
+
+#4. Contrôles et enregistrement
+print("Codes sans sous-bassin :", df_merged["sous_bassin_de_vie"].isna().sum()) #doit afficher 0
+print(df_merged.loc[df_merged["CODGEO_INI"].isin(["75101", "69381", "13201"]), ["CODGEO_INI", "sous_bassin_de_vie"]]) # 75101, 69381 et 13201 doivent être des sous bassins
+print("Nombre de territoires :", df_merged["sous_bassin_de_vie"].nunique())
+
+df_merged.to_parquet(DATA_OUT / "liaison_bv_scindes.parquet", index=False)
+
+
 # =============================================================================
 # BLOC 2 - FILTRAGE DE DVF+
 # =============================================================================
@@ -230,8 +377,8 @@ pop = pop[pop["valeurfonc"].notna() & (pop["valeurfonc"] > 0)
 pop["type_bien"] = pop["libtypbien"].map({"UNE MAISON": "maison", "UN APPARTEMENT": "appart"})
 
 # --- Rattachement à la commune 2026 et au bassin de vie (table du bloc 1) ---
-liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet")
-pop = pop.merge(liaison[["CODGEO_INI", "CODGEO_2026", "BV2022"]],
+liaison = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet")
+pop = pop.merge(liaison[["CODGEO_INI", "CODGEO_2026", "sous_bassin_de_vie"]],
                 left_on="l_codinsee", right_on="CODGEO_INI", how="left", validate="many_to_one")
 arrondissement = pop["l_codinsee"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
 pop["code_commune"] = pop["CODGEO_2026"].where(~arrondissement, pop["l_codinsee"])
@@ -258,8 +405,8 @@ def table_cible(pop, maille, periode):
 
 
 # --- Les six tables, avec contrôle : aucune vente perdue ---
-print("Bloc 4 - ventes après exclusion :", len(pop), "| ventes sans bassin :", pop["BV2022"].isna().sum())
-mailles = {"commune": "code_commune", "bv": "BV2022"}
+print("Bloc 4 - ventes après exclusion :", len(pop), "| ventes sans bassin :", pop["sous_bassin_de_vie"].isna().sum())
+mailles = {"commune": "code_commune", "bv": "sous_bassin_de_vie"}
 pas_de_temps = {"mois": ["annee", "mois"], "trimestre": ["annee", "trimestre"], "annee": ["annee"]}
 for nom_maille, maille in mailles.items():
     for nom_pas, periode in pas_de_temps.items():
@@ -385,15 +532,15 @@ for an in ANNEES_RP:
 menages_com_an = pd.concat(morceaux, ignore_index=True)
 
 # --- Rattachement au bassin de vie (table du bloc 1) ---
-liaison_bv = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet",
-                             columns=["CODGEO_INI", "BV2022", "TYPE_BV2022"])
+liaison_bv = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet",
+                             columns=["CODGEO_INI", "sous_bassin_de_vie", "TYPE_BV2022"])
 res = menages_com_an.merge(liaison_bv, left_on="COM", right_on="CODGEO_INI",
                            how="left", validate="many_to_one")
-print("Bloc 6 (bassins) - lignes commune x année sans bassin, retirées :", res["BV2022"].isna().sum())
-res = res.dropna(subset=["BV2022"])
+print("Bloc 6 (bassins) - lignes commune x année sans bassin, retirées :", res["sous_bassin_de_vie"].isna().sum())
+res = res.dropna(subset=["sous_bassin_de_vie"])
 
 # --- Somme par bassin et par année ---
-bv = res.groupby(["BV2022", "TYPE_BV2022", "annee"], as_index=False, dropna=False).agg(
+bv = res.groupby(["sous_bassin_de_vie", "TYPE_BV2022", "annee"], as_index=False, dropna=False).agg(
     nb_communes=("COM", "size"), **{c: (c, "sum") for c in EFFECTIFS_BV})
 
 
@@ -424,8 +571,8 @@ BORNES = {
     "part_couples_sans_enfants_pct_fam": 1.5,
     "taille_moyenne_menage": 0.03,
 }
-r_2020 = bv[bv["annee"] == 2020].set_index("BV2022")
-r_2022 = bv[bv["annee"] == 2022].set_index("BV2022")
+r_2020 = bv[bv["annee"] == 2020].set_index("sous_bassin_de_vie")
+r_2022 = bv[bv["annee"] == 2022].set_index("sous_bassin_de_vie")
 communs = r_2022.index.intersection(r_2020.index)
 evolution = r_2022.loc[communs, RATIOS_BV] - r_2020.loc[communs, RATIOS_BV]
 for col, borne in BORNES.items():
@@ -436,13 +583,13 @@ an_2024["annee"] = 2024
 an_2024 = an_2024.reset_index()
 
 # --- Table finale, contrôles et enregistrement ---
-colonnes_bv = ["BV2022", "TYPE_BV2022", "annee", "nb_communes", "C_MEN", "C_FAM"] + RATIOS_BV
+colonnes_bv = ["sous_bassin_de_vie", "TYPE_BV2022", "annee", "nb_communes", "C_MEN", "C_FAM"] + RATIOS_BV
 menages_bv = pd.concat([bv, an_2023, an_2024], ignore_index=True)[colonnes_bv]
-menages_bv = menages_bv.sort_values(["BV2022", "annee"]).reset_index(drop=True)
+menages_bv = menages_bv.sort_values(["sous_bassin_de_vie", "annee"]).reset_index(drop=True)
 print("Bloc 6 (bassins) - lignes :", len(menages_bv),
-      "| bassins :", menages_bv["BV2022"].nunique(),
-      "| un bassin x année = une ligne :", not menages_bv.duplicated(["BV2022", "annee"]).any(),
-      "| bassins sans 2024 :", menages_bv["BV2022"].nunique() - len(an_2024))
+      "| bassins :", menages_bv["sous_bassin_de_vie"].nunique(),
+      "| un bassin x année = une ligne :", not menages_bv.duplicated(["sous_bassin_de_vie", "annee"]).any(),
+      "| bassins sans 2024 :", menages_bv["sous_bassin_de_vie"].nunique() - len(an_2024))
 menages_bv.to_parquet(DATA_OUT / "menages_bv_2019_2024.parquet", index=False)
 
 
