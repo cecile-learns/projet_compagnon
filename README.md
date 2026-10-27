@@ -102,12 +102,14 @@ ou exécuter `02_audit_eda/audits.ipynb` et `02_audit_eda/eda.ipynb`, qui contie
 | `passage_geo` | Table de passage des communes 2003-2026 | Insee | géographie 2026 |
 | `bassins_vie` | Bassins de vie 2022 | Insee | géographie 2026 |
 | `filosofi` | Revenus disponibles par commune (Filosofi) | Insee | 2014-2021 |
-| `menages` | Couples, familles, ménages (recensement) | Insee | 2022 |
+| `menages` | Couples, familles, ménages (recensement) | Insee | 2019-2022 |
 | `logement` | Logement (recensement) | Insee | 2022 |
 | `delinquance` | Délinquance enregistrée par commune | SSMSI | 2016-2025 |
 | `lovac` | Logements privés vacants | Cerema | 2020-2026 |
 | `equipements` | Indicateurs d'équipements (BPE 2015 et 2020), table construite par l'équipe | Insee / équipe | 2015, 2020 |
 | `bpe` | Base permanente des équipements 2025 | Insee | 2025 |
+| `bpe_evolution` | Base permanente des équipements en évolution (nombre d'équipements par type et par territoire, dont le bassin de vie) | Insee | 2015, 2020, 2025 |
+| `communes` | Référentiel des communes (dont la superficie) | data.gouv.fr (Insee, IGN) | géographie 2026 |
 | `taux` | Taux des crédits immobiliers aux particuliers | Banque de France | 1998-2026 |
 | `annonces_ventes` | Annonces de vente du Haut-Rhin (axe 2) | échantillon fourni | 2019-2023 |
 | `annonces_locations` | Annonces de location du Haut-Rhin (axe 2) | échantillon fourni | — |
@@ -125,6 +127,7 @@ Tous dans `data/processed/`, au format Parquet (les codes géographiques restent
 | 4 | `cible_bv_{mois,trimestre,annee}.parquet` | un bassin de vie × une période |
 | 5 | `filosofi_commune_2014_2021.parquet` | une commune × une année |
 | 6 | `menages_commune_2022.parquet` | une commune |
+| 6 | `menages_bv_2019_2024.parquet` | un bassin de vie × une année |
 | 7 | `logement_commune_2022.parquet` | une commune |
 | 8 | `delinquance_commune_annee.parquet` | une commune × une année |
 | 9 | `lovac_commune_annee.parquet` | une commune × un millésime |
@@ -169,6 +172,6 @@ np.average(df["libtypbien"] == "UNE MAISON", weights=df["w_h"])
 ## Équipe
 
 - Cécile
+- Christian
 - Gabrielle
 - Theophyle
-- Christian
