@@ -90,6 +90,13 @@ SOURCES = {
         "id": "1bYiuYTkfnWON8Nv9Gc1UAnNCgs09363E",
         "nom": "BPE25.parquet",
     },
+    # BPE en évolution (Insee, DS_BPE_EVOLUTION) : nombre d'équipements par type,
+    # par territoire (dont bassin de vie BV2022), en 2015, 2020 et 2025
+    "bpe_evolution": {
+        "type": "fichier",
+        "id": "1MEv5A8pYqQr9TqAtvQaX90qDm5t3WbTg",
+        "nom": "DS_BPE_EVOLUTION_2025_data.csv",
+    },
     "bassins_vie": {
         "type": "fichier",
         "id": "106njCJVhPHHvHPVIXci3qFknIFOfccv6",
@@ -137,6 +144,13 @@ SOURCES = {
         "type": "fichier",
         "id": "11lEZw7wI3SaAvsIBKLLeRmTusPCs8MRj",
         "nom": "ech_annonces_locations_68.csv",
+    },
+
+    # Référentiel des communes françaises au 1er janvier 2026 (dont superficie en km²)
+    "communes": {
+        "type": "fichier",
+        "id": "1w2WFp_Rw2MwUq0HZX7E1b7UmKhipmXSW",
+        "nom": "communes-france-2026.csv",
     },
 }
 
