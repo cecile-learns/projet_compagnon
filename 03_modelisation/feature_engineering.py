@@ -57,16 +57,6 @@ fe_delinq["part_indicateurs_estimes"] = df_delinq["n_indicateurs_estimes"] / 15 
 variables_delinq = ["annee_faits", "insee_pop", "insee_log", "part_indicateurs_estimes"] + ["nb_" + f for f in FAMILLES_DELINQ]
 df_fe_delinq = fe_delinq[cles_delinq + variables_delinq]
 
-cible = pd.read_parquet(DATA_OUT / "cible_sbv_annee.parquet")
-liaison = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet")
-
-com_fe_delinq = pd.merge(liaison, df_fe_delinq, left_on="CODGEO_INI", right_on="code_commune").drop(columns="code_commune")
-df_final_delinq = pd.merge(com_fe_delinq, cible, on=["sous_bassin_de_vie", "annee"])
-
-df_final_delinq.to_parquet(DATA_OUT / "fe_cible_delinquance_commune.parquet", index=False)
-print("-> Exporté : fe_cible_delinquance_commune.parquet")
-
-
 def taux_lisses(table, maille, familles, fenetre=3):
     """
     Calcule les taux annuels et lissés sur une fenêtre glissante par maille/année.
@@ -88,6 +78,15 @@ def taux_lisses(table, maille, familles, fenetre=3):
         agr["taux3_" + f] = faits_n / denom_n * 1000
         
     return agr.drop(columns="estimes_x_pop")
+
+cible = pd.read_parquet(DATA_OUT / "cible_sbv_annee.parquet")
+liaison = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet")
+
+com_fe_delinq = pd.merge(liaison, df_fe_delinq, left_on="CODGEO_INI", right_on="code_commune").drop(columns="code_commune")
+df_final_delinq = pd.merge(com_fe_delinq, cible, on=["sous_bassin_de_vie", "annee"])
+
+df_final_delinq.to_parquet(DATA_OUT / "fe_cible_delinquance_commune.parquet", index=False)
+print("-> Exporté : fe_cible_delinquance_commune.parquet")
 
 
 # ==============================================================================
@@ -162,3 +161,6 @@ fe_logement = df_logement[["code_commune", "annee_rp"] + EFFECTIFS_LOGEMENT].cop
 
 # 4.3 Fusion et export
 com_fe_logement = pd.merge(fe_logement, liaison, left_on="code_commune", right_on="CODGEO_INI").drop(columns="code_commune")
+df_final=pd.merge(com_fe,cible, left_on=["sous_bassin_de_vie", "annee_rp"], right_on=["sous_bassin_de_vie", "annee"])
+df_final.to_parquet(DATA_OUT / "fe_cible_logement_commune.parquet", index=False)
+print("-> Exporté : fe_cible_logement_communes.parquet")
