@@ -49,7 +49,7 @@ passage = passage[~scindee | identite | cas_52427]
 # --- Ajout des arrondissements (correction de la borne sup pour Lyon) ---
 villes = {
     "75056": ("Paris", range(75101, 75121)),  # 75101 à 75120
-    "69123": ("Lyon", range(69381, 69391)),  # 69381 à 69390
+    "69123": ("Lyon", range(69381, 69390)),  # 69381 à 69389
     "13055": ("Marseille", range(13201, 13217)),  # 13201 à 13216
 }
 
@@ -195,8 +195,7 @@ df_bv_scindes = pd.concat(
 )
 
 # 3. Jointure avec la liaison avec les communes
-df_liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", dtype=str
-)
+df_liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet")
 
 #Clé qui permet de garder le code arrondissement quand c'en est un
 arrondissement = df_liaison["CODGEO_INI"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
@@ -378,7 +377,7 @@ pop["type_bien"] = pop["libtypbien"].map({"UNE MAISON": "maison", "UN APPARTEMEN
 
 # --- Rattachement à la commune 2026 et au bassin de vie (table du bloc 1) ---
 liaison = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet")
-pop = pop.merge(liaison[["CODGEO_INI", "CODGEO_2026", "sous_bassin_de_vie"]],
+pop = pop.merge(liaison[["CODGEO_INI", "CODGEO_2026", "BV2022", "sous_bassin_de_vie"]],
                 left_on="l_codinsee", right_on="CODGEO_INI", how="left", validate="many_to_one")
 arrondissement = pop["l_codinsee"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
 pop["code_commune"] = pop["CODGEO_2026"].where(~arrondissement, pop["l_codinsee"])
@@ -406,7 +405,7 @@ def table_cible(pop, maille, periode):
 
 # --- Les six tables, avec contrôle : aucune vente perdue ---
 print("Bloc 4 - ventes après exclusion :", len(pop), "| ventes sans bassin :", pop["sous_bassin_de_vie"].isna().sum())
-mailles = {"commune": "code_commune", "bv": "sous_bassin_de_vie"}
+mailles = {"commune": "code_commune", "bv": "BV2022", "sbv": "sous_bassin_de_vie"}
 pas_de_temps = {"mois": ["annee", "mois"], "trimestre": ["annee", "trimestre"], "annee": ["annee"]}
 for nom_maille, maille in mailles.items():
     for nom_pas, periode in pas_de_temps.items():
