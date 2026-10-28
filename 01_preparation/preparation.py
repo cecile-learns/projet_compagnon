@@ -46,7 +46,7 @@ cas_52427 = (passage["CODGEO_INI"] == "52427") & (
 )
 passage = passage[~scindee | identite | cas_52427]
 
-# --- Ajout des arrondissements (correction de la borne sup pour Lyon) ---
+# --- Ajout des arrondissements, rattachés au code de leur ville ---
 villes = {
     "75056": ("Paris", range(75101, 75121)),  # 75101 à 75120
     "69123": ("Lyon", range(69381, 69390)),  # 69381 à 69389
@@ -81,7 +81,12 @@ print("Bloc 1 - lignes :", len(liaison),
 liaison.to_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", index=False)
 
 
-# SCINDAGE DES GROS BASSINS DE VIE HETEROGENES
+# --- Scindage des grands bassins de vie (sous-bassins) ---
+# Bassins de 100 000 habitants ou plus découpés selon la grille de densité des
+# communes : _1 (grands centres et centres intermédiaires), _2 (ceintures urbaines
+# et petites villes), _3 (rural). Bassins plus petits : code du bassin inchangé.
+# Arrondissements de Paris, Lyon, Marseille : chacun forme son propre sous-bassin.
+# Sortie : liaison_bv_scindes.parquet = table de liaison + colonne sous_bassin_de_vie.
 
 #1. Chargement et préparation des communes 2026
 df_communes = pd.read_csv(DATA_RAW / "communes-france-2026.csv",
@@ -219,6 +224,13 @@ df_merged = pd.merge(
 # Nettoyage des colonnes
 df_merged.drop(columns=['code_insee_clean','LIBGEO_2026','LIBBV2022', 'code_jointure'], inplace=True)
 
+# Communes absentes de communes-france-2026 (sans grille de densité) :
+# si leur bassin n'est pas scindé, le sous-bassin est le bassin lui-même
+non_scindes = df_merged.loc[df_merged["sous_bassin_de_vie"] == df_merged["BV2022"], "BV2022"].unique()
+manquant = df_merged["sous_bassin_de_vie"].isna() & df_merged["BV2022"].isin(non_scindes)
+df_merged.loc[manquant, "sous_bassin_de_vie"] = df_merged.loc[manquant, "BV2022"]
+print("Sous-bassins complétés par le bassin non scindé :", manquant.sum())
+
 #4. Contrôles et enregistrement
 print("Codes sans sous-bassin :", df_merged["sous_bassin_de_vie"].isna().sum()) #doit afficher 0
 print(df_merged.loc[df_merged["CODGEO_INI"].isin(["75101", "69381", "13201"]), ["CODGEO_INI", "sous_bassin_de_vie"]]) # 75101, 69381 et 13201 doivent être des sous bassins
@@ -355,15 +367,16 @@ print("Bloc 3 - échantillon :", len(ech),
 # =============================================================================
 # BLOC 4 - TABLES CIBLES : PRIX MÉDIAN AU M2
 # =============================================================================
-# Six tables : 2 mailles (commune, bassin de vie) x 3 pas de temps (mois,
-# trimestre, année). Une ligne = une zone x une période, avec par type de bien
+# Neuf tables : 3 mailles (commune, bassin de vie, sous-bassin) x 3 pas de temps
+# (mois, trimestre, année). Une ligne = une zone x une période, avec par type de bien
 # le nombre de ventes et le prix médian au m2 (recalculé à partir des ventes).
 # Toutes les ventes retenues, pas l'échantillon. Aucun seuil de ventes appliqué :
 # le seuil retenu (20 ventes par bassin, par année et par type de bien, EDA A2)
 # est appliqué à la modélisation, à partir de n_maison et n_appart.
 # Géographie constante : code commune 2026. Tables par commune : arrondissements
-# de Paris, Lyon et Marseille séparés. Tables par bassin de vie : arrondissements
-# rattachés au bassin de leur ville (par la table de liaison du bloc 1).
+# de Paris, Lyon et Marseille séparés. Tables par bassin de vie (cible_bv_*) :
+# arrondissements rattachés au bassin de leur ville. Tables par sous-bassin
+# (cible_sbv_*) : chaque arrondissement forme son propre sous-bassin.
 
 # --- Population, colonnes utiles seulement ---
 colonnes = ["idmutation", "anneemut", "moismut", "l_codinsee", "libtypbien", "valeurfonc", "sbati"]
@@ -472,7 +485,8 @@ filo.to_parquet(DATA_OUT / "filosofi_commune_2014_2021.parquet", index=False)
 # feature engineering.
 #  - Partie 1 : par commune, recensement 2022. Ratios entre 0 et 1, tous
 #    rapportés au nombre de ménages.
-#  - Partie 2 : par bassin de vie, recensements 2019 à 2022 prolongés à 2024.
+#  - Partie 2 : par bassin de vie et par sous-bassin, recensements 2019 à 2022
+#    prolongés à 2024 (deux fichiers : menages_bv_* et menages_sbv_*).
 #    Ratios en %, parts familiales rapportées au nombre de familles ;
 #    suffixe _pct_men (pour 100 ménages) ou _pct_fam (pour 100 familles).
 # Base IRIS additionnée par commune (Paris, Lyon, Marseille par arrondissement).
@@ -507,10 +521,7 @@ print("Bloc 6 - communes :", len(menages_com),
       "| communes sans ménage :", men.isna().sum())
 menages_com.to_parquet(DATA_OUT / "menages_commune_2022.parquet", index=False)
 
-# Base retravaillée pour inclure 2019 à 2022 en données brutes INSEE
-ANNEES = [2019, 2020, 2021, 2022]
-A_SUPPRIMER = ["IRIS", "TYP_IRIS", "MODIF_IRIS", "LAB_IRIS"]
-# --- Partie 2 : par bassin de vie, 2019 à 2024 ---
+# --- Partie 2 : par bassin de vie et par sous-bassin, 2019 à 2024 ---
 # 2023 : copie de 2022 (pas encore de recensement publié).
 # 2024 : 2022 + évolution 2020-2022, bornée pour éviter les valeurs extrêmes.
 # Les tests de stabilité qui justifient ces deux choix sont dans le notebook.
@@ -530,18 +541,6 @@ for an in ANNEES_RP:
     morceaux.append(com_an)
 menages_com_an = pd.concat(morceaux, ignore_index=True)
 
-# --- Rattachement au bassin de vie (table du bloc 1) ---
-liaison_bv = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet",
-                             columns=["CODGEO_INI", "sous_bassin_de_vie", "TYPE_BV2022"])
-res = menages_com_an.merge(liaison_bv, left_on="COM", right_on="CODGEO_INI",
-                           how="left", validate="many_to_one")
-print("Bloc 6 (bassins) - lignes commune x année sans bassin, retirées :", res["sous_bassin_de_vie"].isna().sum())
-res = res.dropna(subset=["sous_bassin_de_vie"])
-
-# --- Somme par bassin et par année ---
-bv = res.groupby(["sous_bassin_de_vie", "TYPE_BV2022", "annee"], as_index=False, dropna=False).agg(
-    nb_communes=("COM", "size"), **{c: (c, "sum") for c in EFFECTIFS_BV})
-
 
 # --- Ratios (vides si le dénominateur vaut 0) ---
 def part_pct(numerateur, denominateur):
@@ -549,20 +548,9 @@ def part_pct(numerateur, denominateur):
     return numerateur / denominateur.where(denominateur > 0) * 100
 
 
-bv["taux_personnes_seules_pct_men"] = part_pct(bv["C_MENPSEUL"], bv["C_MEN"])
-bv["part_familles_monoparentales_pct_fam"] = part_pct(bv["C_FAMMONO"], bv["C_FAM"])
-bv["part_familles_nombreuses_pct_fam"] = part_pct(bv["C_NE24F3"] + bv["C_NE24F4P"], bv["C_FAM"])
-bv["part_couples_sans_enfants_pct_fam"] = part_pct(bv["C_COUPSENF"], bv["C_FAM"])
-bv["taille_moyenne_menage"] = bv["C_PMEN"] / bv["C_MEN"].where(bv["C_MEN"] > 0)
 RATIOS_BV = ["taux_personnes_seules_pct_men", "part_familles_monoparentales_pct_fam",
              "part_familles_nombreuses_pct_fam", "part_couples_sans_enfants_pct_fam",
              "taille_moyenne_menage"]
-bv[RATIOS_BV] = bv[RATIOS_BV].round(2)
-
-# --- 2023 : copie de 2022 ---
-an_2023 = bv[bv["annee"] == 2022].assign(annee=2023)
-
-# --- 2024 : 2022 + évolution 2020-2022, bornée (en points de %, en personnes pour la taille) ---
 BORNES = {
     "taux_personnes_seules_pct_men": 1.5,
     "part_familles_monoparentales_pct_fam": 1.5,
@@ -570,26 +558,54 @@ BORNES = {
     "part_couples_sans_enfants_pct_fam": 1.5,
     "taille_moyenne_menage": 0.03,
 }
-r_2020 = bv[bv["annee"] == 2020].set_index("sous_bassin_de_vie")
-r_2022 = bv[bv["annee"] == 2022].set_index("sous_bassin_de_vie")
-communs = r_2022.index.intersection(r_2020.index)
-evolution = r_2022.loc[communs, RATIOS_BV] - r_2020.loc[communs, RATIOS_BV]
-for col, borne in BORNES.items():
-    evolution[col] = evolution[col].clip(lower=-borne, upper=borne)
-an_2024 = r_2022.loc[communs].copy()
-an_2024[RATIOS_BV] = (an_2024[RATIOS_BV] + evolution).round(2)
-an_2024["annee"] = 2024
-an_2024 = an_2024.reset_index()
 
-# --- Table finale, contrôles et enregistrement ---
-colonnes_bv = ["sous_bassin_de_vie", "TYPE_BV2022", "annee", "nb_communes", "C_MEN", "C_FAM"] + RATIOS_BV
-menages_bv = pd.concat([bv, an_2023, an_2024], ignore_index=True)[colonnes_bv]
-menages_bv = menages_bv.sort_values(["sous_bassin_de_vie", "annee"]).reset_index(drop=True)
-print("Bloc 6 (bassins) - lignes :", len(menages_bv),
-      "| bassins :", menages_bv["sous_bassin_de_vie"].nunique(),
-      "| un bassin x année = une ligne :", not menages_bv.duplicated(["sous_bassin_de_vie", "annee"]).any(),
-      "| bassins sans 2024 :", menages_bv["sous_bassin_de_vie"].nunique() - len(an_2024))
-menages_bv.to_parquet(DATA_OUT / "menages_bv_2019_2024.parquet", index=False)
+# --- Même calcul pour les deux mailles (table de liaison du bloc 1) ---
+liaison_bv = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet",
+                             columns=["CODGEO_INI", "BV2022", "sous_bassin_de_vie", "TYPE_BV2022"])
+for nom_maille, maille in {"bv": "BV2022", "sbv": "sous_bassin_de_vie"}.items():
+
+    # Rattachement des communes à la maille
+    res = menages_com_an.merge(liaison_bv[["CODGEO_INI", maille, "TYPE_BV2022"]],
+                               left_on="COM", right_on="CODGEO_INI", how="left", validate="many_to_one")
+    print(f"Bloc 6 ({nom_maille}) - lignes commune x année sans territoire, retirées :", res[maille].isna().sum())
+    res = res.dropna(subset=[maille])
+
+    # Somme par territoire et par année
+    bv = res.groupby([maille, "TYPE_BV2022", "annee"], as_index=False, dropna=False).agg(
+        nb_communes=("COM", "size"), **{c: (c, "sum") for c in EFFECTIFS_BV})
+
+    # Ratios
+    bv["taux_personnes_seules_pct_men"] = part_pct(bv["C_MENPSEUL"], bv["C_MEN"])
+    bv["part_familles_monoparentales_pct_fam"] = part_pct(bv["C_FAMMONO"], bv["C_FAM"])
+    bv["part_familles_nombreuses_pct_fam"] = part_pct(bv["C_NE24F3"] + bv["C_NE24F4P"], bv["C_FAM"])
+    bv["part_couples_sans_enfants_pct_fam"] = part_pct(bv["C_COUPSENF"], bv["C_FAM"])
+    bv["taille_moyenne_menage"] = bv["C_PMEN"] / bv["C_MEN"].where(bv["C_MEN"] > 0)
+    bv[RATIOS_BV] = bv[RATIOS_BV].round(2)
+
+    # 2023 : copie de 2022
+    an_2023 = bv[bv["annee"] == 2022].assign(annee=2023)
+
+    # 2024 : 2022 + évolution 2020-2022, bornée (en points de %, en personnes pour la taille)
+    r_2020 = bv[bv["annee"] == 2020].set_index(maille)
+    r_2022 = bv[bv["annee"] == 2022].set_index(maille)
+    communs = r_2022.index.intersection(r_2020.index)
+    evolution = r_2022.loc[communs, RATIOS_BV] - r_2020.loc[communs, RATIOS_BV]
+    for col, borne in BORNES.items():
+        evolution[col] = evolution[col].clip(lower=-borne, upper=borne)
+    an_2024 = r_2022.loc[communs].copy()
+    an_2024[RATIOS_BV] = (an_2024[RATIOS_BV] + evolution).round(2)
+    an_2024["annee"] = 2024
+    an_2024 = an_2024.reset_index()
+
+    # Table finale, contrôles et enregistrement
+    colonnes_bv = [maille, "TYPE_BV2022", "annee", "nb_communes", "C_MEN", "C_FAM"] + RATIOS_BV
+    menages_bv = pd.concat([bv, an_2023, an_2024], ignore_index=True)[colonnes_bv]
+    menages_bv = menages_bv.sort_values([maille, "annee"]).reset_index(drop=True)
+    print(f"Bloc 6 ({nom_maille}) - lignes :", len(menages_bv),
+          "| territoires :", menages_bv[maille].nunique(),
+          "| un territoire x année = une ligne :", not menages_bv.duplicated([maille, "annee"]).any(),
+          "| territoires sans 2024 :", menages_bv[maille].nunique() - len(an_2024))
+    menages_bv.to_parquet(DATA_OUT / f"menages_{nom_maille}_2019_2024.parquet", index=False)
 
 
 # =============================================================================
@@ -863,3 +879,54 @@ taux_annee.to_parquet(DATA_OUT / "taux_credit_annee.parquet", index=False)
 print("Bloc 11 - mois :", len(taux_mois),
       "| mois en double :", taux.duplicated(["annee", "mois"]).sum(),
       "| trimestres :", len(taux_trimestre), "| années :", len(taux_annee))
+
+
+# =============================================================================
+# BLOC 12 - ÉQUIPEMENTS PAR COMMUNE (BPE 2025)
+# =============================================================================
+# Source : BPE 2025, une ligne = un équipement (audit dans l'EDA complémentaire).
+# Six domaines : services, commerces, santé, transports, sports, tourisme
+# (enseignement exclu). Seuls les types présents dans la BPE en évolution sont
+# comptés : nombres comparables à ceux de l'EDA complémentaire (97,4 % des bassins
+# à moins de 1 % d'écart). Une ligne = une commune (géographie 2026, arrondissements
+# séparés). S'additionne à n'importe quelle maille ; commune absente = 0 équipement.
+
+DOMAINES = {"A": "services", "B": "commerces", "D": "sante",
+            "E": "transports", "F": "sports", "G": "tourisme"}   # C (enseignement) exclu
+
+# --- Lecture : 4 colonnes utiles sur 95 ---
+bpe = pd.read_parquet(DATA_RAW / "BPE25.parquet", columns=["DEPCOM", "DEP", "DOM", "TYPEQU"])
+
+# --- Types de la BPE en évolution (2025, bassins de vie de métropole) ---
+evo = pd.read_csv(DATA_RAW / "DS_BPE_EVOLUTION_2025_data.csv", sep=None, engine="python", dtype=str,
+                  usecols=["GEO_OBJECT", "GEO", "TIME_PERIOD", "FACILITY_TYPE"])
+types_evo = set(evo.loc[(evo["GEO_OBJECT"] == "BV2022") & (evo["TIME_PERIOD"] == "2025")
+                        & ~evo["GEO"].str.startswith("97"), "FACILITY_TYPE"])
+
+# --- Métropole, 6 domaines, types communs aux deux fichiers ---
+n_brut = len(bpe)
+bpe = bpe[~bpe["DEP"].str.startswith("97") & bpe["DOM"].isin(DOMAINES) & bpe["TYPEQU"].isin(types_evo)].copy()
+
+# --- Rattachement à la commune 2026 (table de liaison du bloc 1), arrondissements gardés ---
+liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", columns=["CODGEO_INI", "CODGEO_2026"])
+bpe = bpe.merge(liaison, left_on="DEPCOM", right_on="CODGEO_INI", how="left", validate="many_to_one")
+arrondissement = bpe["DEPCOM"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
+bpe["code_commune"] = bpe["CODGEO_2026"].where(~arrondissement, bpe["DEPCOM"])
+
+# --- Nombre d'équipements par commune et par domaine ---
+bpe["domaine"] = bpe["DOM"].map(DOMAINES)
+equip25 = (bpe.groupby(["code_commune", "domaine"]).size()
+              .unstack(fill_value=0)
+              .add_prefix("nb_equip_")
+              .reset_index())
+equip25.columns.name = None
+equip25["millesime_bpe"] = 2025
+
+# --- Contrôles et enregistrement ---
+colonnes_nb = [c for c in equip25.columns if c.startswith("nb_equip_")]
+print("Bloc 12 - équipements gardés :", len(bpe), "sur", n_brut,
+      "| sans commune 2026 :", bpe["code_commune"].isna().sum(),
+      "| communes :", len(equip25),
+      "| une commune = une ligne :", equip25["code_commune"].is_unique,
+      "| aucun équipement perdu :", equip25[colonnes_nb].sum().sum() == bpe["code_commune"].notna().sum())
+equip25.to_parquet(DATA_OUT / "equipements_commune_2025.parquet", index=False)
