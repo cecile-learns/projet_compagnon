@@ -214,7 +214,7 @@ df_bv_scindes['code_insee_clean'] = df_bv_scindes['code_insee'].str.zfill(5)
 df_merged = pd.merge(
     df_liaison,
     df_bv_scindes[
-        ['code_insee_clean', 'sous_bassin_de_vie', 'pop_bv_totale']
+        ['code_insee_clean', 'sous_bassin_de_vie', 'pop_bv_totale','population', 'superficie_km2']
     ].drop_duplicates(),
     left_on='code_jointure',
     right_on='code_insee_clean',
