@@ -114,6 +114,24 @@ df_communes['sous_bassin_de_vie'] = np.select(
     conditions, choix, default=df_communes['code_bassin_de_vie'] + '_3'
 )
 
+# Calcul des superficies et populations totales au niveau du sous-bassin de vie
+df_superficies_sous_bassins = (
+    df_communes
+    .groupby("sous_bassin_de_vie", as_index=False)
+    .agg(
+        superficie_sbv_km2=("superficie_km2", "sum"),
+        population_sbv=("population", "sum"),
+        nb_communes=("code_insee", "nunique")
+    )
+)
+
+# Réinjecter ces totaux directement dans df_communes
+df_communes = df_communes.merge(
+    df_superficies_sous_bassins[["sous_bassin_de_vie", "superficie_sbv_km2", "population_sbv"]],
+    on="sous_bassin_de_vie",
+    how="left"
+)
+
 # 2. Traitement des arrondissements de Paris, Lyon, Marseille
 pop_arrondissements = {
     # Paris (75101 à 75120)
@@ -214,7 +232,7 @@ df_bv_scindes['code_insee_clean'] = df_bv_scindes['code_insee'].str.zfill(5)
 df_merged = pd.merge(
     df_liaison,
     df_bv_scindes[
-        ['code_insee_clean', 'sous_bassin_de_vie', 'pop_bv_totale','population', 'superficie_km2']
+        ['code_insee_clean', 'sous_bassin_de_vie', 'pop_bv_totale','population_sbv', 'superficie_sbv_km2']
     ].drop_duplicates(),
     left_on='code_jointure',
     right_on='code_insee_clean',
