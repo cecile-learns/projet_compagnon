@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 # Ajout du dossier parent au path Python pour importer la configuration
-sys.path.insert(0, str(Path.cwd().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 Path(__file__).resolve().parents[1]
 from config import DATA_RAW, DATA_OUT
 
@@ -102,6 +102,7 @@ print("--- [2/6] TRAITEMENT : LOVAC ---")
 
 # 2.1 Chargement des données
 df_lovac = pd.read_parquet(DATA_OUT / "lovac_commune_annee.parquet")
+df_logement_p22 = pd.read_parquet(DATA_OUT / "logement_commune_2022.parquet", columns=["code_commune", "P22_LOG"])
 
 # 2.2 Préparation et filtre sur la photo fixe (Millésime 2023)
 MILLESIME_PHOTO_LOVAC = 2023
@@ -149,6 +150,10 @@ cols_a_exclure = ["code_commune", "CODGEO_INI", "CODGEO_2026", "sous_bassin_de_v
 cols_equip = [c for c in equip.columns if c not in cols_a_exclure]
 
 sbv_equip = com_fe_equip.groupby("sous_bassin_de_vie")[cols_equip].sum().reset_index()
+
+# Imputation par 0 sur les comptes d'équipements
+cols_nb_equip = [c for c in sbv_equip.columns if c.startswith("nb_equip_")]
+sbv_equip[cols_nb_equip] = sbv_equip[cols_nb_equip].fillna(0)
 
 # Conservation du millésime (valeur unique / première valeur disponible)
 if "millesime_bpe" in equip.columns:
