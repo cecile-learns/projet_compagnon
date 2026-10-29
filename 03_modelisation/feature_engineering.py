@@ -18,7 +18,6 @@ import pandas as pd
 
 # Ajout du dossier parent au path Python pour importer la configuration
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-Path(__file__).resolve().parents[1]
 from config import DATA_RAW, DATA_OUT
 
 # Chargement des tables de référence communes
@@ -151,10 +150,6 @@ cols_equip = [c for c in equip.columns if c not in cols_a_exclure]
 
 sbv_equip = com_fe_equip.groupby("sous_bassin_de_vie")[cols_equip].sum().reset_index()
 
-# Imputation par 0 sur les comptes d'équipements
-cols_nb_equip = [c for c in sbv_equip.columns if c.startswith("nb_equip_")]
-sbv_equip[cols_nb_equip] = sbv_equip[cols_nb_equip].fillna(0)
-
 # Conservation du millésime (valeur unique / première valeur disponible)
 if "millesime_bpe" in equip.columns:
     millesime_val = equip["millesime_bpe"].iloc[0]
@@ -163,6 +158,10 @@ if "millesime_bpe" in equip.columns:
 # 3.3 Jointure à la cible
 df_final_equip = pd.merge(cible, sbv_equip, on="sous_bassin_de_vie", how="left")
 assert len(df_final_equip) == len(cible), "Erreur de granulométrie sur les équipements"
+
+# Imputation par 0 sur les comptes d'équipements
+cols_nb_equip = [c for c in df_final_equip.columns if c.startswith("nb_equip_")]
+df_final_equip[cols_nb_equip] = df_final_equip[cols_nb_equip].fillna(0)"
 
 df_final_equip.to_parquet(DATA_OUT / "fe_cible_equipement_sbv.parquet", index=False)
 print("-> Exporté : fe_cible_equipement_sbv.parquet")
@@ -255,7 +254,7 @@ fe_filosofi = fe_filosofi.rename(columns={"NBMEN": "nb_menages_fiscaux"})
 # 5.3 Rattachement aux sous-bassins
 com_fe_filosofi = pd.merge(liaison, fe_filosofi, left_on="CODGEO_INI", right_on="code_commune").drop(columns=["code_commune"])
 
-# 5.4 Agrégation au sous-bassin (Médiane pondérée par le nombre de ménages)
+# 5.4 Agrégation au sous-bassin (Moyenne des médianes pondérée par les ménages)
 com_fe_filosofi["masse_niveau_vie"] = com_fe_filosofi["niveau_vie_median"] * com_fe_filosofi["nb_menages_fiscaux"]
 
 sbv_filosofi = com_fe_filosofi.groupby("sous_bassin_de_vie").agg(
