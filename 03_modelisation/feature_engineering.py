@@ -18,6 +18,7 @@ import pandas as pd
 
 # Ajout du dossier parent au path Python pour importer la configuration
 sys.path.insert(0, str(Path.cwd().parent))
+Path(__file__).resolve().parents[1]
 from config import DATA_RAW, DATA_OUT
 
 # Chargement des tables de référence communes
@@ -90,8 +91,8 @@ sbv_fe_delinq = taux_lisses(com_fe_delinq, maille="sous_bassin_de_vie", familles
 df_final_delinq = pd.merge(cible, sbv_fe_delinq, on=["sous_bassin_de_vie", "annee"], how="left")
 assert len(df_final_delinq) == len(cible), "Erreur de granulométrie sur la délinquance"
 
-df_final_delinq.to_parquet(DATA_OUT / "fe_cible_delinquance_commune.parquet", index=False)
-print("-> Exporté : fe_cible_delinquance_commune.parquet")
+df_final_delinq.to_parquet(DATA_OUT / "fe_cible_delinquance_sbv.parquet", index=False)
+print("-> Exporté : fe_cible_delinquance_sbv.parquet")
 
 
 # ==============================================================================
@@ -106,22 +107,31 @@ df_lovac = pd.read_parquet(DATA_OUT / "lovac_commune_annee.parquet")
 MILLESIME_PHOTO_LOVAC = 2023
 fe_lovac = df_lovac[df_lovac["millesime"] == MILLESIME_PHOTO_LOVAC].copy()
 
-# 2.3 Rattachement aux sous-bassins et agrégation des effectifs
+# 2.3 Jointure pour récupérer P22_LOG et rattachement aux sous-bassins
+fe_lovac = pd.merge(fe_lovac, df_logement_p22, on="code_commune", how="left")
 com_fe_lovac = pd.merge(liaison, fe_lovac, left_on="CODGEO_INI", right_on="code_commune").drop(columns=["code_commune"])
 
-if "nb_logements_vacants" in com_fe_lovac.columns and "nb_logements_totaux" in com_fe_lovac.columns:
-    sbv_lovac = com_fe_lovac.groupby("sous_bassin_de_vie")[["nb_logements_vacants", "nb_logements_totaux"]].sum().reset_index()
-    sbv_lovac["taux_vacance_complete"] = sbv_lovac["nb_logements_vacants"] / sbv_lovac["nb_logements_totaux"] * 100
-else:
-    sbv_lovac = com_fe_lovac.groupby("sous_bassin_de_vie")[["taux_vacance_complete", "taux_impute"]].mean().reset_index()
+# 2.4 Calcul de la moyenne pondérée par P22_LOG à l'échelle du sous-bassin
+com_fe_lovac["vacance_complete_x_p22"] = com_fe_lovac["taux_vacance_complete"] * com_fe_lovac["P22_LOG"]
+com_fe_lovac["impute_x_p22"] = com_fe_lovac["taux_impute"] * com_fe_lovac["P22_LOG"]
 
-# 2.4 Jointure à la cible
+sbv_lovac = com_fe_lovac.groupby("sous_bassin_de_vie").agg(
+    somme_vacance_complete=("vacance_complete_x_p22", "sum"),
+    somme_impute=("impute_x_p22", "sum"),
+    total_p22_log=("P22_LOG", "sum")
+).reset_index()
+
+sbv_lovac["taux_vacance_complete"] = sbv_lovac["somme_vacance_complete"] / sbv_lovac["total_p22_log"]
+sbv_lovac["taux_impute"] = sbv_lovac["somme_impute"] / sbv_lovac["total_p22_log"]
+
+sbv_lovac = sbv_lovac[["sous_bassin_de_vie", "taux_vacance_complete", "taux_impute"]]
+
+# 2.5 Jointure à la cible
 df_final_lovac = pd.merge(cible, sbv_lovac, on="sous_bassin_de_vie", how="left")
 assert len(df_final_lovac) == len(cible), "Erreur de granulométrie sur LOVAC"
 
-df_final_lovac.to_parquet(DATA_OUT / "fe_cible_vacance_commune.parquet", index=False)
-print("-> Exporté : fe_cible_vacance_commune.parquet")
-
+df_final_lovac.to_parquet(DATA_OUT / "fe_cible_vacance_sbv.parquet", index=False)
+print("-> Exporté : fe_cible_vacance_sbv.parquet")
 
 # ==============================================================================
 # SECTION 3 : FEATURE ENGINEERING - EQUIPEMENTS (BPE)
@@ -133,16 +143,24 @@ equip = pd.read_parquet(DATA_OUT / "equipements_commune_2025.parquet")
 
 # 3.2 Rattachement et agrégation par sous-bassin
 com_fe_equip = pd.merge(equip, liaison, left_on="code_commune", right_on="CODGEO_INI")
-cols_equip = [c for c in equip.columns if c not in ["code_commune", "CODGEO_INI", "CODGEO_2026", "sous_bassin_de_vie"]]
+
+# Exclusion des clés de métadonnées / jointures et du millésime
+cols_a_exclure = ["code_commune", "CODGEO_INI", "CODGEO_2026", "sous_bassin_de_vie", "millesime_bpe"]
+cols_equip = [c for c in equip.columns if c not in cols_a_exclure]
 
 sbv_equip = com_fe_equip.groupby("sous_bassin_de_vie")[cols_equip].sum().reset_index()
+
+# Conservation du millésime (valeur unique / première valeur disponible)
+if "millesime_bpe" in equip.columns:
+    millesime_val = equip["millesime_bpe"].iloc[0]
+    sbv_equip["millesime_bpe"] = millesime_val
 
 # 3.3 Jointure à la cible
 df_final_equip = pd.merge(cible, sbv_equip, on="sous_bassin_de_vie", how="left")
 assert len(df_final_equip) == len(cible), "Erreur de granulométrie sur les équipements"
 
-df_final_equip.to_parquet(DATA_OUT / "fe_cible_equipement_communes.parquet", index=False)
-print("-> Exporté : fe_cible_equipement_communes.parquet")
+df_final_equip.to_parquet(DATA_OUT / "fe_cible_equipement_sbv.parquet", index=False)
+print("-> Exporté : fe_cible_equipement_sbv.parquet")
 
 
 # ==============================================================================
@@ -172,28 +190,40 @@ EFFECTIFS_LOGEMENT = sorted({c for cols in INDICATEURS_LOGEMENT.values() for c i
 
 fe_logement = df_logement[["code_commune", "annee_rp"] + EFFECTIFS_LOGEMENT].copy()
 
-# 4.3 Rattachement et agrégation par sous-bassin
+# 4.3 Rattachement et agrégation des effectifs par sous-bassin
 com_fe_logement = pd.merge(fe_logement, liaison, left_on="code_commune", right_on="CODGEO_INI").drop(columns=["code_commune"])
-sbv_logement = com_fe_logement.groupby("sous_bassin_de_vie")[EFFECTIFS_LOGEMENT].sum().reset_index()
+sbv_logement = com_fe_logement.groupby("sous_bassin_de_vie")[EFFECTIFS_LOGEMENT].sum()
 
-# 4.4 Calcul des taux à l'échelle du sous-bassin
-sbv_logement["taux_vacance"] = sbv_logement["P22_LOGVAC"] / sbv_logement["P22_LOG"] * 100
-sbv_logement["part_rsec"] = sbv_logement["P22_RSECOCC"] / sbv_logement["P22_LOG"] * 100
-sbv_logement["part_apparts"] = sbv_logement["P22_APPART"] / sbv_logement["P22_LOG"] * 100
-sbv_logement["log_nb_logements"] = np.log1p(sbv_logement["P22_LOG"])
-sbv_logement["part_moins40m2"] = (sbv_logement["P22_RP_M30M2"] + sbv_logement["P22_RP_3040M2"]) / sbv_logement["P22_RP"] * 100
-sbv_logement["part_avant1946"] = (sbv_logement["P22_RP_ACH1919"] + sbv_logement["P22_RP_ACH1945"]) / sbv_logement["P22_RP"] * 100
-sbv_logement["part_2006_2019"] = sbv_logement["P22_RP_ACH2019"] / sbv_logement["P22_RP"] * 100
-sbv_logement["part_sans_voiture"] = sbv_logement["P22_RP_VOIT1P"] / sbv_logement["P22_MEN"] * 100
-sbv_logement["part_parking"] = sbv_logement["P22_RP_GARL"] / sbv_logement["P22_MEN"] * 100
-sbv_logement["part_suroccupes"] = (sbv_logement["C22_RP_SUROCC_MOD"] + sbv_logement["C22_RP_SUROCC_ACC"]) / sbv_logement["P22_RP"] * 100
+# 4.4 Calcul des 12 indicateurs à l'échelle du sous-bassin
+def indicateurs_logement(e):
+    """Calcule les 12 indicateurs à partir d'effectifs additionnés à une maille."""
+    e = e.copy()
+    for d in ["P22_LOG", "P22_RP", "P22_MEN"]:
+        e[d] = e[d].where(e[d] > 0)   # dénominateur nul -> valeur vide au lieu d'un infini
+
+    r = pd.DataFrame(index=e.index)
+    r["taux_vacance"] = e["P22_LOGVAC"] / e["P22_LOG"] * 100
+    r["part_rsec"] = e["P22_RSECOCC"] / e["P22_LOG"] * 100
+    r["part_apparts"] = e["P22_APPART"] / e["P22_LOG"] * 100
+    r["log_nb_logements"] = np.log10(e["P22_LOG"])
+    r["part_moins40m2"] = (e["P22_RP_M30M2"] + e["P22_RP_3040M2"]) / e["P22_RP"] * 100
+    r["part_avant1946"] = (e["P22_RP_ACH1919"] + e["P22_RP_ACH1945"]) / e["P22_RP"] * 100
+    r["part_2006_2019"] = e["P22_RP_ACH2019"] / e["P22_RP"] * 100
+    r["anciennete_moyenne"] = e["P22_ANEM_RP"] / e["P22_RP"]
+    r["taille_menage"] = e["P22_NPER_RP"] / e["P22_RP"]
+    r["part_sans_voiture"] = 100 - e["P22_RP_VOIT1P"] / e["P22_MEN"] * 100
+    r["part_parking"] = e["P22_RP_GARL"] / e["P22_MEN"] * 100
+    r["part_suroccupes"] = (e["C22_RP_SUROCC_MOD"] + e["C22_RP_SUROCC_ACC"]) / e["P22_RP"] * 100
+    return r
+
+df_ind_logement = indicateurs_logement(sbv_logement).reset_index()
 
 # 4.5 Jointure à la cible
-df_final_logement = pd.merge(cible, sbv_logement, on="sous_bassin_de_vie", how="left")
+df_final_logement = pd.merge(cible, df_ind_logement, on="sous_bassin_de_vie", how="left")
 assert len(df_final_logement) == len(cible), "Erreur de granulométrie sur le parc de logements"
 
-df_final_logement.to_parquet(DATA_OUT / "fe_cible_logement_commune.parquet", index=False)
-print("-> Exporté : fe_cible_logement_commune.parquet")
+df_final_logement.to_parquet(DATA_OUT / "fe_cible_logement_sbv.parquet", index=False)
+print("-> Exporté : fe_cible_logement_sbv.parquet")
 
 
 # ==============================================================================
@@ -237,8 +267,8 @@ sbv_filosofi = sbv_filosofi[["sous_bassin_de_vie", "niveau_vie_median", "nb_mena
 df_final_filosofi = pd.merge(cible, sbv_filosofi, on="sous_bassin_de_vie", how="left")
 assert len(df_final_filosofi) == len(cible), "Erreur de granulométrie sur Filosofi"
 
-df_final_filosofi.to_parquet(DATA_OUT / "fe_cible_filosofi_commune.parquet", index=False)
-print("-> Exporté : fe_cible_filosofi_commune.parquet")
+df_final_filosofi.to_parquet(DATA_OUT / "fe_cible_filosofi_sbv.parquet", index=False)
+print("-> Exporté : fe_cible_filosofi_sbv.parquet")
 
 
 # ==============================================================================
@@ -276,9 +306,13 @@ sbv_dvf = com_fe_dvf.groupby(["sous_bassin_de_vie", "annee"]).agg(
     n_ventes_appart_n1=("n_ventes_appart_n1", "sum")
 ).reset_index()
 
-# 6.6 Jointure à la cible
+# 6.6 Jointure à la cible et imputation des valeurs manquantes
 df_final_dvf = pd.merge(cible, sbv_dvf, on=["sous_bassin_de_vie", "annee"], how="left")
+
+cols_ventes = [c for c in df_final_dvf.columns if c.startswith("n_ventes_")]
+df_final_dvf[cols_ventes] = df_final_dvf[cols_ventes].fillna(0)
+
 assert len(df_final_dvf) == len(cible), "Erreur de granulométrie sur DVF+"
 
-df_final_dvf.to_parquet(DATA_OUT / "fe_cible_dvf_commune.parquet", index=False)
-print("-> Exporté : fe_cible_dvf_commune.parquet")
+df_final_dvf.to_parquet(DATA_OUT / "fe_cible_dvf_sbv.parquet", index=False)
+print("-> Exporté : fe_cible_dvf_sbv.parquet")
