@@ -161,7 +161,7 @@ assert len(df_final_equip) == len(cible), "Erreur de granulométrie sur les équ
 
 # Imputation par 0 sur les comptes d'équipements
 cols_nb_equip = [c for c in df_final_equip.columns if c.startswith("nb_equip_")]
-df_final_equip[cols_nb_equip] = df_final_equip[cols_nb_equip].fillna(0)"
+df_final_equip[cols_nb_equip] = df_final_equip[cols_nb_equip].fillna(0)
 
 df_final_equip.to_parquet(DATA_OUT / "fe_cible_equipement_sbv.parquet", index=False)
 print("-> Exporté : fe_cible_equipement_sbv.parquet")
