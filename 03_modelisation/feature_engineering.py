@@ -301,10 +301,12 @@ vides = table_finale.drop(columns=CLES_SBV + cols_cible).isna().mean().mul(100).
 print(vides[vides > 0].sort_values(ascending=False).to_string())
 
 
+
 # ==============================================================================
-# SECTION 7 : Fusion, encodage du type de bien, création d'index
+# SECTION 7 : FUSION DES SIX TABLES (une ligne par sous-bassin x année, comme la cible)
 # ==============================================================================
-# Tables produites par les sections précédentes (une ligne par sous-bassin x année, comme la cible)
+print("--- [7/8] FUSION DES SOURCES ---")
+ 
 FICHIERS_FE = [
     "fe_cible_delinquance_sbv.parquet",
     "fe_cible_vacance_sbv.parquet",
@@ -316,8 +318,7 @@ FICHIERS_FE = [
 CLES_SBV = ["sous_bassin_de_vie", "annee"]
 cols_cible = [c for c in cible.columns if c not in CLES_SBV]   # colonnes de la cible, gardées une seule fois
 assert not cible.duplicated(CLES_SBV).any(), "La cible a des doublons sur sous-bassin x année"
-
-# Fusion de toutes les tables
+ 
 table_finale = cible.copy()
 for nom in FICHIERS_FE:
     t = pd.read_parquet(DATA_OUT / nom).drop(columns=cols_cible)
@@ -325,123 +326,143 @@ for nom in FICHIERS_FE:
     deja_la = (set(t.columns) & set(table_finale.columns)) - set(CLES_SBV)
     assert not deja_la, f"{nom} : colonnes déjà présentes {sorted(deja_la)}"
     table_finale = pd.merge(table_finale, t, on=CLES_SBV, how="left", validate="one_to_one")
-
+ 
 assert len(table_finale) == len(cible), "Nombre de lignes modifié par la fusion des sources"
 table_finale.to_parquet(DATA_OUT / "fe_cible_toutes_sources_sbv.parquet", index=False)
 print("-> Exporté : fe_cible_toutes_sources_sbv.parquet", table_finale.shape)
-
+ 
 # Contrôle : part de valeurs vides par variable (hors cible), de la plus vide à la moins vide
 vides = table_finale.drop(columns=CLES_SBV + cols_cible).isna().mean().mul(100).round(1)
 print(vides[vides > 0].sort_values(ascending=False).to_string())
-
-
-"""
-Passage de la table "large" (une ligne par sous-bassin de vie x année,
-avec des colonnes séparées pour maisons et appartements) à une table
-"longue" (une ligne par sous-bassin x année x type de bien), avec
-encodage binaire du type de bien.
-
-Entrée  : fe_cible_toutes_sources_sbv.parquet
-Sortie  : fe_cible_toutes_sources_sbv_encodee.parquet
-"""
-
-# ---------------------------------------------------------------------------
-# 1. Lecture
+ 
+ 
+# ==============================================================================
+# SECTION 8 : TABLE DE MODÉLISATION (format long, prix N-1, index, export)
+# ==============================================================================
+print("--- [8/8] TABLE DE MODÉLISATION ---")
+ 
+# 8.1 Passage en format long : une ligne par sous-bassin x année x type de bien
+#     n_ventes = ventes de l'année N : sert au seuil, JAMAIS une feature (fuite)
+#     prix = nom attendu par commun.py ; une seule indicatrice (maison) : maison + appartement = 1 toujours
 df = pd.read_parquet(DATA_OUT / "fe_cible_toutes_sources_sbv.parquet")
-
-# 2. Correspondance entre les colonnes d'origine et les colonnes cibles
-# Trois variables existent en double dans la table d'origine (une version
-# "maison", une version "appart"). On les ramène chacune à une seule colonne.
-
+ 
+# Colonnes propres à un type de bien -> nom commun en format long
 CORRESPONDANCE = {
-    "maison": {
-        "nb_biens": "n_maison",
-        "nb_ventes_n1": "n_ventes_maison_n1",
-        "prix_m2_med": "prix_m2_med_maison",
-    },
-    "appartement": {
-        "nb_biens": "n_appart",
-        "nb_ventes_n1": "n_ventes_appart_n1",
-        "prix_m2_med": "prix_m2_med_appart",
-    },
+    "maison":      {"n_ventes": "n_maison", "nb_ventes_n1": "n_ventes_maison_n1", "prix": "prix_m2_med_maison"},
+    "appartement": {"n_ventes": "n_appart", "nb_ventes_n1": "n_ventes_appart_n1", "prix": "prix_m2_med_appart"},
 }
-
-CLES = ["sous_bassin_de_vie", "annee"]
-
-# Colonnes spécifiques à un type de bien (à ne pas recopier telles quelles).
-colonnes_specifiques = [
-    ancienne
-    for mapping in CORRESPONDANCE.values()
-    for ancienne in mapping.values()
-]
-
-# Toutes les autres colonnes (criminalité, INSEE, équipements...) décrivent le
-# territoire et non le type de bien : elles seront dupliquées à l'identique
-# sur les deux lignes.
-colonnes_communes = [
-    c for c in df.columns if c not in colonnes_specifiques and c not in CLES
-]
-
-# 3. Construction d'un bloc par type de bien
+CLES_SBV = ["sous_bassin_de_vie", "annee"]
+ 
+colonnes_specifiques = [ancien for mapping in CORRESPONDANCE.values() for ancien in mapping.values()]
+# Variables du territoire : identiques pour les deux types de bien
+colonnes_territoire = [c for c in df.columns if c not in colonnes_specifiques + CLES_SBV]
+ 
 blocs = []
 for type_bien, mapping in CORRESPONDANCE.items():
-    bloc = df[CLES].copy()
-
-    # Encodage binaire (one-hot) : 1 pour le type de la ligne, 0 pour l'autre.
-    bloc["maison"] = int(type_bien == "maison")
-    bloc["appartement"] = int(type_bien == "appartement")
-
-    # Variables propres au type de bien, renommées avec un nom commun.
-    for nouveau_nom, ancien_nom in mapping.items():
-        bloc[nouveau_nom] = df[ancien_nom]
-
-    # Variables du territoire, identiques pour les deux types de bien.
-    for c in colonnes_communes:
-        bloc[c] = df[c]
-
-    # Ordre d'affichage : maison en premier (0), appartement ensuite (1).
-    bloc["_ordre"] = 0 if type_bien == "maison" else 1
-    blocs.append(bloc)
-
-# 4. Empilement et tri
-# Tri par sous-bassin, année, puis type de bien : on obtient pour chaque
-# couple sous-bassin x année une ligne maison suivie d'une ligne appartement.
-table_longue = (
-    pd.concat(blocs)
-    .sort_values(CLES + ["_ordre"])
-    .drop(columns="_ordre")
-    .reset_index(drop=True)
-)
-
-# 5. Contrôles
-# Le nombre de lignes doit avoir exactement doublé.
+    bloc = df[CLES_SBV].copy()
+    bloc["type_bien"] = type_bien
+    bloc["maison"] = int(type_bien == "maison")      # seule indicatrice du type de bien
+    for nouveau, ancien in mapping.items():
+        bloc[nouveau] = df[ancien]
+    blocs.append(pd.concat([bloc, df[colonnes_territoire]], axis=1))
+ 
+table_longue = pd.concat(blocs, ignore_index=True)
+ 
+# Contrôles : lignes exactement doublées, une seule ligne par sous-bassin x année x type
+assert len(table_longue) == 2 * len(df), "Le nombre de lignes n'a pas doublé"
+assert not table_longue.duplicated(CLES_SBV + ["type_bien"]).any(), "Doublons sous-bassin x année x type"
+print(table_longue.shape)
+ 
+ 
+# 8.2 Seuil de 20 ventes, AVANT prix_n1 : sinon un prix peu fiable deviendrait le prix N-1 de l'année suivante
+#     La ligne est gardée, seul son prix est vidé
+SEUIL_VENTES = 20
+ 
+# n_ventes vide = aucune vente connue : traité comme sous le seuil
+sous_seuil = ~(table_longue["n_ventes"] >= SEUIL_VENTES)
+table_longue.loc[sous_seuil, "prix"] = np.nan
+ 
+print("Prix vidés (moins de", SEUIL_VENTES, "ventes) :", int(sous_seuil.sum()))
+print(table_longue.assign(prix_connu=table_longue["prix"].notna())
+      .pivot_table(index="annee", columns="type_bien", values="prix_connu", aggfunc="sum"))
+ 
+ 
+# 8.3 prix_n1 : prix de l'année précédente, même sous-bassin, même type de bien
+#     Jointure sur l'année précédente (pas de décalage de lignes : une année absente ne fait rien glisser)
+prix_annee_precedente = (table_longue[["sous_bassin_de_vie", "type_bien", "annee", "prix"]]
+                         .assign(annee=lambda t: t["annee"] + 1)      # le prix de N-1 sert pour l'année N
+                         .rename(columns={"prix": "prix_n1"}))
+ 
+table_longue = table_longue.merge(prix_annee_precedente, on=["sous_bassin_de_vie", "type_bien", "annee"],
+                                  how="left", validate="one_to_one")
+ 
+assert len(table_longue) == 2 * len(df), "Nombre de lignes modifié par le calcul de prix_n1"
+print("prix_n1 renseigné :", int(table_longue["prix_n1"].notna().sum()), "lignes sur", len(table_longue))
+ 
+ 
+# 8.4 Index à 3 niveaux (annee, sous_bassin_de_vie, type_bien) : les codes de sous-bassin contiennent déjà un "_",
+#     une chaîne "2020_01004_1_maison" ne permettrait pas de les retrouver.
+#     type_bien seulement dans l'index (commun.py fait groupby("type_bien") : ambigu s'il était aussi en colonne) ;
+#     annee dans l'index ET en colonne (commun.decouper fait table["annee"]).
+#     Colonnes retirées (liste écrite) : les 4 millésimes, annee_faits et annee_ventes (= annee - 1)
+NIVEAUX_INDEX = ["annee", "sous_bassin_de_vie", "type_bien"]
+COLONNES_A_RETIRER = ["millesime_lovac", "millesime_bpe", "millesime_rp", "millesime_filosofi",
+                      "annee_faits", "annee_ventes"]
+ 
+absentes = sorted(set(COLONNES_A_RETIRER) - set(table_longue.columns))
+assert not absentes, f"Colonnes à retirer introuvables : {absentes}"
+ 
+table_longue = (table_longue
+                .set_index(NIVEAUX_INDEX, drop=False)
+                .drop(columns=["sous_bassin_de_vie", "type_bien"] + COLONNES_A_RETIRER)   # annee reste en colonne
+                .sort_index())
+ 
+assert table_longue.index.is_unique, "L'index annee x sous-bassin x type n'est pas unique"
+print(table_longue.shape)
+ 
+ 
+# 8.5 Cible, colonnes hors modèle, features ; ligne utilisable = prix et prix_n1 renseignés
+CIBLE = "prix"
+ANNEE_EN_FEATURE = False      # à aligner sur la décision de l'étape 0 de la modélisation
+HORS_MODELE = ["n_ventes"] + ([] if ANNEE_EN_FEATURE else ["annee"])
+FEATURES = [c for c in table_longue.columns if c not in [CIBLE] + HORS_MODELE]
+ 
+assert "prix_n1" in FEATURES and "maison" in FEATURES
+assert "n_ventes" not in FEATURES, "n_ventes (ventes de l'année N) ne doit jamais être une feature"
+assert "appartement" not in table_longue.columns
+ 
+utilisable = table_longue[CIBLE].notna() & table_longue["prix_n1"].notna()
+ 
+non_numeriques = [c for c in FEATURES if not pd.api.types.is_numeric_dtype(table_longue[c])]
+print(len(FEATURES), "features | non numériques :", non_numeriques)
+print("Lignes utilisables :", int(utilisable.sum()), "sur", len(table_longue))
+ 
+ 
+# 8.6 Contrôles : lignes doublées, index unique, prix_n1 2024 = prix 2023, 823 / 1 777 sous-bassins en 2024 (baseline)
+# Lignes doublées et index unique
 assert len(table_longue) == 2 * len(df)
-# Une et une seule des deux colonnes d'encodage vaut 1 sur chaque ligne.
-assert (table_longue["maison"] + table_longue["appartement"] == 1).all()
-# Aucune clé (sous-bassin, année, type) en double.
-assert not table_longue.duplicated(CLES + ["maison"]).any()
-
-# 6. Génération d'un index annee_sbv_typebien et suppression des colonnes constantes
-# La création de l'index nous permettra de supprimer la colonne du sbv et de ne pas avoir de lignes en doublons/ vérifier qu'il n'y a pas de doublons.
-type_bien = table_longue["maison"].map({1: "maison", 0: "appartement"})
-table_longue.index = (
-    table_longue["annee"].astype(str)
-    + "_" + table_longue["sous_bassin_de_vie"]
-    + "_" + type_bien
-)
-table_longue.index.name = "annee_sbv_typebien"
-
-# L'index doit identifier chaque ligne de façon unique.
 assert table_longue.index.is_unique
-
-# Les colonnes constantes, par définition, n'apportent pas d'informations.
-colonnes_constantes = [c for c in table_longue.columns if table_longue[c].nunique(dropna=True) <= 1]
-table_longue = table_longue.drop(columns=colonnes_constantes)
-
-table_longue=table_longue.drop(columns="sous_bassin_de_vie")
-
-# 7. Export
-# Les valeurs manquantes (prix absent, premier nb_ventes_n1 de chaque
-# sous-bassin) restent vides : elles ne sont pas imputées ici.
-table_longue.to_parquet(DATA_OUT / "fe_cible_toutes_sources_sbv_encodee.parquet", index=True)
-print("-> Exporté : fe_cible_toutes_sources_sbv_encodee.parquet", table_longue.shape)
+ 
+# prix_n1 2024 = prix 2023 : un exemple lisible...
+prix_2023 = table_longue.xs(2023, level="annee")["prix"].dropna()
+sbv_ex, type_ex = prix_2023.index[0]
+print(f"Exemple {sbv_ex} / {type_ex} : prix 2023 =", table_longue.loc[(2023, sbv_ex, type_ex), "prix"],
+      "| prix_n1 2024 =", table_longue.loc[(2024, sbv_ex, type_ex), "prix_n1"])
+assert table_longue.loc[(2024, sbv_ex, type_ex), "prix_n1"] == table_longue.loc[(2023, sbv_ex, type_ex), "prix"]
+ 
+# ... puis sur toutes les lignes de 2024
+prix_n1_2024 = table_longue.xs(2024, level="annee")["prix_n1"]
+attendu = table_longue.xs(2023, level="annee")["prix"].reindex(prix_n1_2024.index)
+assert prix_n1_2024.equals(attendu), "prix_n1 2024 différent du prix 2023"
+ 
+# Nombre de sous-bassins utilisables en 2024, par type de bien (baseline : 823 et 1 777)
+utilisables_2024 = utilisable[utilisable.index.get_level_values("annee") == 2024].groupby("type_bien").sum()
+print(utilisables_2024.to_string())
+assert utilisables_2024.to_dict() == {"appartement": 823, "maison": 1777}, "Écart avec la baseline (823 / 1 777)"
+ 
+ 
+# 8.7 Export sous le nom lu par commun.py (FICHIER_TABLE), lignes utilisables seulement
+table_modelisation = table_longue[utilisable]
+table_modelisation.to_parquet(DATA_OUT / "table_modelisation_bv.parquet", index=True)
+print("-> Exporté : table_modelisation_bv.parquet", table_modelisation.shape)
+print(table_modelisation.groupby(level=["annee", "type_bien"]).size().unstack())
