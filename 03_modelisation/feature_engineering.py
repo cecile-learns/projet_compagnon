@@ -299,3 +299,149 @@ print("-> Exporté : fe_cible_toutes_sources_sbv.parquet", table_finale.shape)
 # Contrôle : part de valeurs vides par variable (hors cible), de la plus vide à la moins vide
 vides = table_finale.drop(columns=CLES_SBV + cols_cible).isna().mean().mul(100).round(1)
 print(vides[vides > 0].sort_values(ascending=False).to_string())
+
+
+# ==============================================================================
+# SECTION 7 : Fusion, encodage du type de bien, création d'index
+# ==============================================================================
+# Tables produites par les sections précédentes (une ligne par sous-bassin x année, comme la cible)
+FICHIERS_FE = [
+    "fe_cible_delinquance_sbv.parquet",
+    "fe_cible_vacance_sbv.parquet",
+    "fe_cible_equipement_sbv.parquet",
+    "fe_cible_logement_sbv.parquet",
+    "fe_cible_filosofi_sbv.parquet",
+    "fe_cible_dvf_sbv.parquet",
+]
+CLES_SBV = ["sous_bassin_de_vie", "annee"]
+cols_cible = [c for c in cible.columns if c not in CLES_SBV]   # colonnes de la cible, gardées une seule fois
+assert not cible.duplicated(CLES_SBV).any(), "La cible a des doublons sur sous-bassin x année"
+
+# Fusion de toutes les tables
+table_finale = cible.copy()
+for nom in FICHIERS_FE:
+    t = pd.read_parquet(DATA_OUT / nom).drop(columns=cols_cible)
+    # Une colonne présente dans deux sources serait renommée _x / _y en silence : on l'interdit
+    deja_la = (set(t.columns) & set(table_finale.columns)) - set(CLES_SBV)
+    assert not deja_la, f"{nom} : colonnes déjà présentes {sorted(deja_la)}"
+    table_finale = pd.merge(table_finale, t, on=CLES_SBV, how="left", validate="one_to_one")
+
+assert len(table_finale) == len(cible), "Nombre de lignes modifié par la fusion des sources"
+table_finale.to_parquet(DATA_OUT / "fe_cible_toutes_sources_sbv.parquet", index=False)
+print("-> Exporté : fe_cible_toutes_sources_sbv.parquet", table_finale.shape)
+
+# Contrôle : part de valeurs vides par variable (hors cible), de la plus vide à la moins vide
+vides = table_finale.drop(columns=CLES_SBV + cols_cible).isna().mean().mul(100).round(1)
+print(vides[vides > 0].sort_values(ascending=False).to_string())
+
+
+"""
+Passage de la table "large" (une ligne par sous-bassin de vie x année,
+avec des colonnes séparées pour maisons et appartements) à une table
+"longue" (une ligne par sous-bassin x année x type de bien), avec
+encodage binaire du type de bien.
+
+Entrée  : fe_cible_toutes_sources_sbv.parquet
+Sortie  : fe_cible_toutes_sources_sbv_encodee.parquet
+"""
+
+# ---------------------------------------------------------------------------
+# 1. Lecture
+df = pd.read_parquet(DATA_OUT / "fe_cible_toutes_sources_sbv.parquet")
+
+# 2. Correspondance entre les colonnes d'origine et les colonnes cibles
+# Trois variables existent en double dans la table d'origine (une version
+# "maison", une version "appart"). On les ramène chacune à une seule colonne.
+
+CORRESPONDANCE = {
+    "maison": {
+        "nb_biens": "n_maison",
+        "nb_ventes_n1": "n_ventes_maison_n1",
+        "prix_m2_med": "prix_m2_med_maison",
+    },
+    "appartement": {
+        "nb_biens": "n_appart",
+        "nb_ventes_n1": "n_ventes_appart_n1",
+        "prix_m2_med": "prix_m2_med_appart",
+    },
+}
+
+CLES = ["sous_bassin_de_vie", "annee"]
+
+# Colonnes spécifiques à un type de bien (à ne pas recopier telles quelles).
+colonnes_specifiques = [
+    ancienne
+    for mapping in CORRESPONDANCE.values()
+    for ancienne in mapping.values()
+]
+
+# Toutes les autres colonnes (criminalité, INSEE, équipements...) décrivent le
+# territoire et non le type de bien : elles seront dupliquées à l'identique
+# sur les deux lignes.
+colonnes_communes = [
+    c for c in df.columns if c not in colonnes_specifiques and c not in CLES
+]
+
+# 3. Construction d'un bloc par type de bien
+blocs = []
+for type_bien, mapping in CORRESPONDANCE.items():
+    bloc = df[CLES].copy()
+
+    # Encodage binaire (one-hot) : 1 pour le type de la ligne, 0 pour l'autre.
+    bloc["maison"] = int(type_bien == "maison")
+    bloc["appartement"] = int(type_bien == "appartement")
+
+    # Variables propres au type de bien, renommées avec un nom commun.
+    for nouveau_nom, ancien_nom in mapping.items():
+        bloc[nouveau_nom] = df[ancien_nom]
+
+    # Variables du territoire, identiques pour les deux types de bien.
+    for c in colonnes_communes:
+        bloc[c] = df[c]
+
+    # Ordre d'affichage : maison en premier (0), appartement ensuite (1).
+    bloc["_ordre"] = 0 if type_bien == "maison" else 1
+    blocs.append(bloc)
+
+# 4. Empilement et tri
+# Tri par sous-bassin, année, puis type de bien : on obtient pour chaque
+# couple sous-bassin x année une ligne maison suivie d'une ligne appartement.
+table_longue = (
+    pd.concat(blocs)
+    .sort_values(CLES + ["_ordre"])
+    .drop(columns="_ordre")
+    .reset_index(drop=True)
+)
+
+# 5. Contrôles
+# Le nombre de lignes doit avoir exactement doublé.
+assert len(table_longue) == 2 * len(df)
+# Une et une seule des deux colonnes d'encodage vaut 1 sur chaque ligne.
+assert (table_longue["maison"] + table_longue["appartement"] == 1).all()
+# Aucune clé (sous-bassin, année, type) en double.
+assert not table_longue.duplicated(CLES + ["maison"]).any()
+
+# 6. Génération d'un index annee_sbv_typebien et suppression des colonnes constantes
+# La création de l'index nous permettra de supprimer la colonne du sbv et de ne pas avoir de lignes en doublons/ vérifier qu'il n'y a pas de doublons.
+type_bien = table_longue["maison"].map({1: "maison", 0: "appartement"})
+table_longue.index = (
+    table_longue["annee"].astype(str)
+    + "_" + table_longue["sous_bassin_de_vie"]
+    + "_" + type_bien
+)
+table_longue.index.name = "annee_sbv_typebien"
+
+# L'index doit identifier chaque ligne de façon unique.
+assert table_longue.index.is_unique
+
+# Les colonnes constantes, par définition, n'apportent pas d'informations.
+colonnes_constantes = [c for c in table_longue.columns if table_longue[c].nunique(dropna=True) <= 1]
+table_longue = table_longue.drop(columns=colonnes_constantes)
+
+table_longue=table_longue.drop(columns="sous_bassin_de_vie")
+
+# 7. Export
+# Les valeurs manquantes (prix absent, premier nb_ventes_n1 de chaque
+# sous-bassin) restent vides : elles ne sont pas imputées ici.
+table_longue.to_parquet(DATA_OUT / "fe_cible_toutes_sources_sbv_encodee.parquet", index=False)
+print("-> Exporté : fe_cible_toutes_sources_sbv_encodee.parquet", table_longue.shape)
