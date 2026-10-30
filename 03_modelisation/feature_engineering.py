@@ -443,5 +443,5 @@ table_longue=table_longue.drop(columns="sous_bassin_de_vie")
 # 7. Export
 # Les valeurs manquantes (prix absent, premier nb_ventes_n1 de chaque
 # sous-bassin) restent vides : elles ne sont pas imputées ici.
-table_longue.to_parquet(DATA_OUT / "fe_cible_toutes_sources_sbv_encodee.parquet", index=False)
+table_longue.to_parquet(DATA_OUT / "fe_cible_toutes_sources_sbv_encodee.parquet", index=True)
 print("-> Exporté : fe_cible_toutes_sources_sbv_encodee.parquet", table_longue.shape)
