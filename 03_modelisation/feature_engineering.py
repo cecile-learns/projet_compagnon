@@ -1,10 +1,10 @@
 """
 Feature engineering - une table par source, jointe à la cible au sous-bassin de vie
 ===================================================================================
-Auteurs      : Cécile & Théophile
+Auteurs      : Cécile, Théophile & Gabrielle (jointures aux sous-bassins)
 Date         : 29/10/2026
-Description  : délinquance, LOVAC, équipements (BPE 2025), parc de logements
-               (recensement 2022), Filosofi et DVF+ (volume de ventes).
+Description  : délinquance, LOVAC, équipements (BPE 2025), densité de population,
+               parc de logements (recensement 2022), Filosofi et DVF+ (volume de ventes).
                Pour chaque source : préparation à la commune, rattachement aux
                sous-bassins (liaison_bv_scindes), agrégation, jointure à gauche
                sur la cible (cible_sbv_annee), export fe_cible_<source>_sbv.parquet.
@@ -38,7 +38,7 @@ def taux_lisses(table, maille, familles, fenetre=3):
     """Taux annuels (taux1_) et lissés sur `fenetre` années (taux3_) par maille x année,
     pour 1 000 habitants (1 000 logements pour les cambriolages).
     Faits et dénominateurs sont additionnés avant le calcul des taux.
-    Le taux lissé reste vide tant que la fenêtre n'est pas complète (premières années)."""
+    Premières années : la fenêtre grandit (1 an, puis 2 ans, puis `fenetre` ans)."""
     table = table.copy()
     table["estimes_x_pop"] = table["part_indicateurs_estimes"] * table["insee_pop"]
     colonnes = ["nb_" + f for f in familles] + ["insee_pop", "insee_log", "estimes_x_pop"]
@@ -47,11 +47,11 @@ def taux_lisses(table, maille, familles, fenetre=3):
     agr = agr.sort_values([maille, "annee"]).reset_index(drop=True)
     # 2. Fiabilité : moyenne pondérée par la population
     agr["part_indicateurs_estimes"] = agr["estimes_x_pop"] / agr["insee_pop"]
-    # 3. Taux annuel et taux lissé (années passées uniquement, fenêtre complète)
+    # 3. Taux annuel et taux lissé (années passées uniquement ; fenêtre qui grandit au début)
     for f in familles:
         denom = "insee_log" if f == "cambriolages" else "insee_pop"
-        faits_n = agr.groupby(maille)["nb_" + f].rolling(fenetre, min_periods=fenetre).sum().reset_index(level=0, drop=True)
-        denom_n = agr.groupby(maille)[denom].rolling(fenetre, min_periods=fenetre).sum().reset_index(level=0, drop=True)
+        faits_n = agr.groupby(maille)["nb_" + f].rolling(fenetre, min_periods=1).sum().reset_index(level=0, drop=True)
+        denom_n = agr.groupby(maille)[denom].rolling(fenetre, min_periods=1).sum().reset_index(level=0, drop=True)
         agr["taux1_" + f] = agr["nb_" + f] / agr[denom] * 1000
         agr["taux3_" + f] = faits_n / denom_n * 1000
     return agr.drop(columns="estimes_x_pop")
@@ -119,10 +119,18 @@ fe_delinq["annee"] = df_delinq["annee"] + 1
 # 1.3 Fiabilité : part des 15 indicateurs estimés (secret statistique)
 fe_delinq["part_indicateurs_estimes"] = df_delinq["n_indicateurs_estimes"] / 15 * 100
 
-# 1.4 Rattachement aux sous-bassins, taux annuels et lissés sur 3 ans
+# 1.4 Rattachement aux sous-bassins, taux lissés sur 3 ans
 com_delinq = pd.merge(liaison, fe_delinq, left_on="CODGEO_INI", right_on="code_commune")
 sbv_delinq = taux_lisses(com_delinq, maille="sous_bassin_de_vie", familles=list(FAMILLES_DELINQ))
 sbv_delinq["annee_faits"] = sbv_delinq["annee"] - 1
+
+# Une seule variable par famille : le taux lissé sur 3 ans (plus stable dans les petits sous-bassins),
+# sur 1 an pour les prix 2017 et 2 ans pour les prix 2018 (fenêtre qui grandit).
+# Nombres de faits et dénominateurs (insee_pop, insee_log) n'ont servi qu'au calcul des taux ;
+# taux annuels (taux1_) retirés
+DELINQ_GARDEES = (["sous_bassin_de_vie", "annee", "annee_faits", "part_indicateurs_estimes"]
+                  + ["taux3_" + f for f in FAMILLES_DELINQ])
+sbv_delinq = sbv_delinq[DELINQ_GARDEES]
 
 # 1.5 Jointure à la cible et export
 joindre_cible(sbv_delinq, ["sous_bassin_de_vie", "annee"], "fe_cible_delinquance_sbv.parquet")
@@ -168,15 +176,62 @@ cols_equip = [c for c in equip.columns if c.startswith("nb_equip_")]
 
 # 3.1 Rattachement et somme par sous-bassin
 com_equip = pd.merge(liaison, equip, left_on="CODGEO_INI", right_on="code_commune")
-sbv_equip = com_equip.groupby("sous_bassin_de_vie")[cols_equip].sum().reset_index()
+sbv_equip = com_equip.groupby("sous_bassin_de_vie")[cols_equip].sum()
 
-# 3.2 Jointure à la cible ; sous-bassin sans équipement recensé = 0 (règle de l'EDA complémentaire)
-final_equip = pd.merge(cible, sbv_equip, on="sous_bassin_de_vie", how="left", validate="many_to_one")
-final_equip[cols_equip] = final_equip[cols_equip].fillna(0)
-final_equip["millesime_bpe"] = 2025
-assert len(final_equip) == len(cible), "Nombre de lignes modifié par la jointure : équipements"
-final_equip.to_parquet(DATA_OUT / "fe_cible_equipement_sbv.parquet", index=False)
-print("-> Exporté : fe_cible_equipement_sbv.parquet", final_equip.shape)
+# 3.2 Population du sous-bassin : habitants de 2024 (SSMSI), l'année la plus proche de la BPE 2025
+#     (sert aussi à la densité, section 3 bis)
+pop_2024 = pd.read_parquet(DATA_OUT / "delinquance_commune_annee.parquet",
+                           columns=["code_commune", "annee", "insee_pop"])
+pop_2024 = pop_2024.loc[pop_2024["annee"] == 2024, ["code_commune", "insee_pop"]]
+com_pop = pd.merge(liaison, pop_2024, left_on="CODGEO_INI", right_on="code_commune")
+pop_sbv = com_pop.groupby("sous_bassin_de_vie")["insee_pop"].sum()
+
+# 3.3 Taux pour 10 000 habitants ; sous-bassin sans équipement recensé = 0 (règle de l'EDA complémentaire)
+#     Les nombres bruts ne sont pas exportés
+nb_sbv = sbv_equip.reindex(pop_sbv.index, fill_value=0)
+taux_equip = nb_sbv.div(pop_sbv.where(pop_sbv > 0), axis=0) * 10_000
+taux_equip.columns = [c.replace("nb_equip_", "taux_equip_") for c in cols_equip]
+taux_equip["millesime_bpe"] = 2025
+taux_equip = taux_equip.reset_index()
+
+# 3.4 Jointure à la cible (même photo pour toutes les années) et export
+final_equip = joindre_cible(taux_equip, ["sous_bassin_de_vie"], "fe_cible_equipement_sbv.parquet")
+print("Sous-bassins de la cible sans population :",
+      final_equip.loc[final_equip["taux_equip_commerces"].isna(), "sous_bassin_de_vie"].nunique())
+
+
+# ==============================================================================
+# SECTION 3 BIS : DENSITÉ DE POPULATION (photo fixe)
+# ==============================================================================
+print("--- [3 bis] DENSITÉ DE POPULATION ---")
+
+superficie = pd.read_parquet(DATA_OUT / "communes_superficie_2026.parquet")
+
+# 3b.1 Arrondissements de Paris, Lyon, Marseille : absents du fichier des superficies.
+#      Superficie de la ville répartie entre ses arrondissements au prorata de leur population 2024
+#      (chaque arrondissement prend la densité de sa ville). La ville entière est retirée.
+VILLES_ARRONDISSEMENTS = {"75056": r"^751\d\d$", "69123": r"^6938\d$", "13055": r"^132\d\d$"}
+morceaux = [superficie[~superficie["code_commune"].isin(VILLES_ARRONDISSEMENTS)]]
+for ville, motif in VILLES_ARRONDISSEMENTS.items():
+    arr = pop_2024[pop_2024["code_commune"].str.match(motif)].copy()
+    sup_ville = superficie.loc[superficie["code_commune"] == ville, "superficie_km2"].iloc[0]
+    arr["superficie_km2"] = sup_ville * arr["insee_pop"] / arr["insee_pop"].sum()
+    morceaux.append(arr[["code_commune", "superficie_km2"]])
+superficie_com = pd.concat(morceaux, ignore_index=True)
+assert superficie_com["code_commune"].is_unique, "Commune en double dans les superficies"
+print("Arrondissements ajoutés :", len(superficie_com) - len(morceaux[0]), "(45 attendus)")
+
+# 3b.2 Superficie additionnée au sous-bassin, densité = habitants 2024 / km²
+com_sup = pd.merge(liaison, superficie_com, left_on="CODGEO_INI", right_on="code_commune")
+sup_sbv = com_sup.groupby("sous_bassin_de_vie")["superficie_km2"].sum(min_count=1)
+sbv_densite = pd.DataFrame({"densite_population": pop_sbv / sup_sbv.reindex(pop_sbv.index).where(lambda x: x > 0)})
+sbv_densite = sbv_densite.rename_axis("sous_bassin_de_vie").reset_index()
+
+# 3b.3 Jointure à la cible (même photo pour toutes les années) et export
+final_densite = joindre_cible(sbv_densite, ["sous_bassin_de_vie"], "fe_cible_densite_sbv.parquet")
+densite = final_densite.drop_duplicates("sous_bassin_de_vie")["densite_population"]
+print(densite.describe().round(0).to_string())
+print("Sous-bassins de la cible sans densité :", densite.isna().sum())
 
 
 # ==============================================================================
@@ -236,12 +291,22 @@ com_filosofi["poids"] = com_filosofi["nb_menages_fiscaux"].where(connue)
 com_filosofi["masse_niveau_vie"] = (com_filosofi["niveau_vie_median"] * com_filosofi["nb_menages_fiscaux"]).where(connue)
 sbv_filosofi = com_filosofi.groupby("sous_bassin_de_vie")[["masse_niveau_vie", "poids"]].sum(min_count=1)
 sbv_filosofi["niveau_vie_median"] = sbv_filosofi["masse_niveau_vie"] / sbv_filosofi["poids"]
-sbv_filosofi = sbv_filosofi.rename(columns={"poids": "nb_menages_fiscaux"})
-sbv_filosofi["millesime_filosofi"] = MILLESIME_FILOSOFI
-sbv_filosofi = sbv_filosofi[["niveau_vie_median", "nb_menages_fiscaux", "millesime_filosofi"]].reset_index()
 
-# 5.3 Jointure à la cible (même photo pour toutes les années) et export
-joindre_cible(sbv_filosofi, ["sous_bassin_de_vie"], "fe_cible_filosofi_sbv.parquet")
+# 5.3 Part des ménages couverts (contrôle qualité) : ménages fiscaux des communes à médiane connue
+#     / ménages du recensement 2022 (Filosofi masque aussi le nombre de ménages des petites communes).
+#     Définitions un peu différentes : la part peut dépasser légèrement 100 %. Le nombre n'est pas exporté
+men_rp = pd.read_parquet(DATA_OUT / "logement_commune_2022.parquet", columns=["code_commune", "P22_MEN"])
+com_men = pd.merge(liaison, men_rp, left_on="CODGEO_INI", right_on="code_commune")
+men_sbv = com_men.groupby("sous_bassin_de_vie")["P22_MEN"].sum().reindex(sbv_filosofi.index)
+sbv_filosofi["part_menages_couverts"] = sbv_filosofi["poids"] / men_sbv.where(men_sbv > 0) * 100
+sbv_filosofi["millesime_filosofi"] = MILLESIME_FILOSOFI
+sbv_filosofi = sbv_filosofi[["niveau_vie_median", "part_menages_couverts", "millesime_filosofi"]].reset_index()
+
+# 5.4 Jointure à la cible (même photo pour toutes les années) et export
+final_filosofi = joindre_cible(sbv_filosofi, ["sous_bassin_de_vie"], "fe_cible_filosofi_sbv.parquet")
+couverts = final_filosofi.drop_duplicates("sous_bassin_de_vie")["part_menages_couverts"]
+print(couverts.describe().round(1).to_string())
+print("Sous-bassins à plus de 100 % :", (couverts > 100).sum())
 
 
 # ==============================================================================
@@ -271,39 +336,9 @@ assert len(final_dvf) == len(cible), "Nombre de lignes modifié par la jointure 
 final_dvf.to_parquet(DATA_OUT / "fe_cible_dvf_sbv.parquet", index=False)
 print("-> Exporté : fe_cible_dvf_sbv.parquet", final_dvf.shape)
 
-# Tables produites par les sections 1 à 6 (une ligne par sous-bassin x année, comme la cible)
-FICHIERS_FE = [
-    "fe_cible_delinquance_sbv.parquet",
-    "fe_cible_vacance_sbv.parquet",
-    "fe_cible_equipement_sbv.parquet",
-    "fe_cible_logement_sbv.parquet",
-    "fe_cible_filosofi_sbv.parquet",
-    "fe_cible_dvf_sbv.parquet",
-]
-CLES_SBV = ["sous_bassin_de_vie", "annee"]
-cols_cible = [c for c in cible.columns if c not in CLES_SBV]   # colonnes de la cible, gardées une seule fois
-assert not cible.duplicated(CLES_SBV).any(), "La cible a des doublons sur sous-bassin x année"
-
-table_finale = cible.copy()
-for nom in FICHIERS_FE:
-    t = pd.read_parquet(DATA_OUT / nom).drop(columns=cols_cible)
-    # Une colonne présente dans deux sources serait renommée _x / _y en silence : on l'interdit
-    deja_la = (set(t.columns) & set(table_finale.columns)) - set(CLES_SBV)
-    assert not deja_la, f"{nom} : colonnes déjà présentes {sorted(deja_la)}"
-    table_finale = pd.merge(table_finale, t, on=CLES_SBV, how="left", validate="one_to_one")
-
-assert len(table_finale) == len(cible), "Nombre de lignes modifié par la fusion des sources"
-table_finale.to_parquet(DATA_OUT / "fe_cible_toutes_sources_sbv.parquet", index=False)
-print("-> Exporté : fe_cible_toutes_sources_sbv.parquet", table_finale.shape)
-
-# Contrôle : part de valeurs vides par variable (hors cible), de la plus vide à la moins vide
-vides = table_finale.drop(columns=CLES_SBV + cols_cible).isna().mean().mul(100).round(1)
-print(vides[vides > 0].sort_values(ascending=False).to_string())
-
-
 
 # ==============================================================================
-# SECTION 7 : FUSION DES SIX TABLES (une ligne par sous-bassin x année, comme la cible)
+# SECTION 7 : FUSION DES SEPT TABLES (une ligne par sous-bassin x année, comme la cible)
 # ==============================================================================
 print("--- [7/8] FUSION DES SOURCES ---")
  
@@ -311,6 +346,7 @@ FICHIERS_FE = [
     "fe_cible_delinquance_sbv.parquet",
     "fe_cible_vacance_sbv.parquet",
     "fe_cible_equipement_sbv.parquet",
+    "fe_cible_densite_sbv.parquet",
     "fe_cible_logement_sbv.parquet",
     "fe_cible_filosofi_sbv.parquet",
     "fe_cible_dvf_sbv.parquet",

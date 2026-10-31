@@ -114,24 +114,6 @@ df_communes['sous_bassin_de_vie'] = np.select(
     conditions, choix, default=df_communes['code_bassin_de_vie'] + '_3'
 )
 
-# Calcul des superficies et populations totales au niveau du sous-bassin de vie
-df_superficies_sous_bassins = (
-    df_communes
-    .groupby("sous_bassin_de_vie", as_index=False)
-    .agg(
-        superficie_sbv_km2=("superficie_km2", "sum"),
-        population_sbv=("population", "sum"),
-        nb_communes=("code_insee", "nunique")
-    )
-)
-
-# Réinjecter ces totaux directement dans df_communes
-df_communes = df_communes.merge(
-    df_superficies_sous_bassins[["sous_bassin_de_vie", "superficie_sbv_km2", "population_sbv"]],
-    on="sous_bassin_de_vie",
-    how="left"
-)
-
 # 2. Traitement des arrondissements de Paris, Lyon, Marseille
 pop_arrondissements = {
     # Paris (75101 à 75120)
@@ -232,7 +214,7 @@ df_bv_scindes['code_insee_clean'] = df_bv_scindes['code_insee'].str.zfill(5)
 df_merged = pd.merge(
     df_liaison,
     df_bv_scindes[
-        ['code_insee_clean', 'sous_bassin_de_vie', 'pop_bv_totale','population_sbv', 'superficie_sbv_km2']
+        ['code_insee_clean', 'sous_bassin_de_vie', 'pop_bv_totale']
     ].drop_duplicates(),
     left_on='code_jointure',
     right_on='code_insee_clean',
@@ -255,6 +237,17 @@ print(df_merged.loc[df_merged["CODGEO_INI"].isin(["75101", "69381", "13201"]), [
 print("Nombre de territoires :", df_merged["sous_bassin_de_vie"].nunique())
 
 df_merged.to_parquet(DATA_OUT / "liaison_bv_scindes.parquet", index=False)
+
+# --- Superficie de chaque commune 2026 (km²), pour la densité calculée au feature engineering ---
+# Paris, Lyon, Marseille en ville entière : les arrondissements sont absents du fichier
+superficie = pd.read_csv(DATA_RAW / "communes-france-2026.csv", usecols=["code_insee", "superficie_km2"],
+                         dtype={"code_insee": str})
+superficie["code_insee"] = superficie["code_insee"].str.zfill(5)
+superficie = superficie.rename(columns={"code_insee": "code_commune"})
+print("Bloc 1 - superficie : communes :", len(superficie),
+      "| une commune = une ligne :", superficie["code_commune"].is_unique,
+      "| sans superficie :", superficie["superficie_km2"].isna().sum())
+superficie.to_parquet(DATA_OUT / "communes_superficie_2026.parquet", index=False)
 
 
 # =============================================================================
