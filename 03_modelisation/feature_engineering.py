@@ -5,7 +5,8 @@ Auteurs      : Cécile, Théophile, Gabrielle (jointures aux sous-bassins)
                & Christian (superficie des arrondissements)
 Date         : 29/10/2026, mis à jour le 03/11/2026
 Description  : délinquance, LOVAC, équipements (BPE 2025), densité de population,
-               parc de logements (recensement 2022), Filosofi et DVF+ (volume de ventes).
+               parc de logements (recensement 2022), Filosofi, ménages (recensements
+               2019-2022) et DVF+ (volume de ventes).
                Pour chaque source : préparation à la commune, rattachement aux
                sous-bassins (liaison_bv_scindes), agrégation, jointure à gauche
                sur la cible (cible_sbv_annee), export fe_cible_<source>_sbv.parquet.
@@ -80,6 +81,20 @@ def indicateurs_logement(e):
     r["part_suroccupes"] = (e["C22_RP_SUROCC_MOD"] + e["C22_RP_SUROCC_ACC"]) / e["P22_RP"] * 100
     return r
 
+def indicateurs_menages(e):
+    """Calcule les 5 indicateurs des ménages à partir d'effectifs additionnés à une maille,
+    arrondis à 2 décimales. Parts en % : suffixe _pct_men (pour 100 ménages) ou
+    _pct_fam (pour 100 familles) ; taille moyenne en personnes par ménage."""
+    men = e["C_MEN"].where(e["C_MEN"] > 0)   # dénominateur nul -> valeur vide au lieu d'un infini
+    fam = e["C_FAM"].where(e["C_FAM"] > 0)
+
+    r = pd.DataFrame(index=e.index)
+    r["taux_personnes_seules_pct_men"] = e["C_MENPSEUL"] / men * 100
+    r["part_familles_monoparentales_pct_fam"] = e["C_FAMMONO"] / fam * 100
+    r["part_familles_nombreuses_pct_fam"] = (e["C_NE24F3"] + e["C_NE24F4P"]) / fam * 100
+    r["part_couples_sans_enfants_pct_fam"] = e["C_COUPSENF"] / fam * 100
+    r["taille_moyenne_menage"] = e["C_PMEN"] / men
+    return r.round(2)
 
 def joindre_cible(table_sbv, cles, nom_fichier):
     """Jointure à gauche sur la cible, contrôle du nombre de lignes, export."""
@@ -316,6 +331,64 @@ couverts = final_filosofi.drop_duplicates("sous_bassin_de_vie")["part_menages_co
 print(couverts.describe().round(1).to_string())
 print("Sous-bassins à plus de 100 % :", (couverts > 100).sum())
 
+# ==============================================================================
+# SECTION 5 BIS : MÉNAGES (recensements 2019-2022, prolongés à 2024)
+# ==============================================================================
+print("--- [5 bis] MÉNAGES ---")
+
+df_menages = pd.read_parquet(DATA_OUT / "menages_commune_2019_2022.parquet")
+
+EFFECTIFS_MENAGES = ["C_MEN", "C_MENPSEUL", "C_PMEN", "C_FAM",
+                     "C_FAMMONO", "C_COUPSENF", "C_NE24F3", "C_NE24F4P"]
+RATIOS_MENAGES = ["taux_personnes_seules_pct_men", "part_familles_monoparentales_pct_fam",
+                  "part_familles_nombreuses_pct_fam", "part_couples_sans_enfants_pct_fam",
+                  "taille_moyenne_menage"]
+# Évolution 2020-2022 bornée pour 2024 (en points de %, en personnes pour la taille)
+BORNES_MENAGES = {
+    "taux_personnes_seules_pct_men": 1.5,
+    "part_familles_monoparentales_pct_fam": 1.5,
+    "part_familles_nombreuses_pct_fam": 1.0,
+    "part_couples_sans_enfants_pct_fam": 1.5,
+    "taille_moyenne_menage": 0.03,
+}
+
+# 5b.1 Rattachement aux sous-bassins (codes commune de chaque millésime, via CODGEO_INI),
+#      effectifs additionnés par sous-bassin x année, puis ratios (jamais de moyenne de ratios)
+com_menages = pd.merge(liaison, df_menages, left_on="CODGEO_INI", right_on="code_commune")
+print("Lignes commune x année sans sous-bassin, retirées :", len(df_menages) - len(com_menages))
+eff_menages = com_menages.groupby(["sous_bassin_de_vie", "annee"])[EFFECTIFS_MENAGES].sum()
+sbv_menages = indicateurs_menages(eff_menages).reset_index()
+
+# 5b.2 2023 : copie de 2022 (pas encore de recensement publié) ;
+#      2024 : 2022 + évolution 2020-2022, bornée pour éviter les valeurs extrêmes
+r_2020 = sbv_menages[sbv_menages["annee"] == 2020].set_index("sous_bassin_de_vie")[RATIOS_MENAGES]
+r_2022 = sbv_menages[sbv_menages["annee"] == 2022].set_index("sous_bassin_de_vie")[RATIOS_MENAGES]
+communs = r_2022.index.intersection(r_2020.index)
+evolution = r_2022.loc[communs] - r_2020.loc[communs]
+for col, borne in BORNES_MENAGES.items():
+    evolution[col] = evolution[col].clip(lower=-borne, upper=borne)
+an_2023 = r_2022.assign(annee=2023).reset_index()
+an_2024 = (r_2022.loc[communs] + evolution).round(2).assign(annee=2024).reset_index()
+sbv_menages = pd.concat([sbv_menages, an_2023, an_2024], ignore_index=True)
+sbv_menages = sbv_menages.sort_values(["sous_bassin_de_vie", "annee"]).reset_index(drop=True)
+assert not sbv_menages.duplicated(["sous_bassin_de_vie", "annee"]).any(), "Doublons sous-bassin x année (ménages)"
+print("Sous-bassins sans 2024 (absents en 2020) :", sbv_menages["sous_bassin_de_vie"].nunique() - len(an_2024))
+
+# 5b.3 Années de prix hors 2019-2024 : recensement de l'année la plus proche
+#      (2019 pour les prix 2014-2018, 2024 pour les prix 2025), gardé dans annee_rp_menages
+annees_menages = pd.DataFrame({"annee": sorted(cible["annee"].unique())})
+annees_menages["annee_rp_menages"] = annees_menages["annee"].clip(sbv_menages["annee"].min(),
+                                                                  sbv_menages["annee"].max())
+print(annees_menages.to_string(index=False))
+sbv_menages = pd.merge(annees_menages, sbv_menages.rename(columns={"annee": "annee_rp_menages"}),
+                       on="annee_rp_menages")
+sbv_menages = sbv_menages[["sous_bassin_de_vie", "annee", "annee_rp_menages"] + RATIOS_MENAGES]
+
+# 5b.4 Jointure à la cible (sous-bassin x année) et export
+final_menages = joindre_cible(sbv_menages, ["sous_bassin_de_vie", "annee"], "fe_cible_menages_sbv.parquet")
+print("Lignes de la cible sans ménages :", final_menages["taux_personnes_seules_pct_men"].isna().sum())
+print(final_menages[RATIOS_MENAGES].describe().round(2).to_string())
+
 
 # ==============================================================================
 # SECTION 6 : DVF+ (volume de ventes N-1)
@@ -346,7 +419,7 @@ print("-> Exporté : fe_cible_dvf_sbv.parquet", final_dvf.shape)
 
 
 # ==============================================================================
-# SECTION 7 : FUSION DES SEPT TABLES (une ligne par sous-bassin x année, comme la cible)
+# SECTION 7 : FUSION DES HUIT TABLES (une ligne par sous-bassin x année, comme la cible)
 # ==============================================================================
 print("--- [7/8] FUSION DES SOURCES ---")
  
@@ -357,6 +430,7 @@ FICHIERS_FE = [
     "fe_cible_densite_sbv.parquet",
     "fe_cible_logement_sbv.parquet",
     "fe_cible_filosofi_sbv.parquet",
+    "fe_cible_menages_sbv.parquet",
     "fe_cible_dvf_sbv.parquet",
 ]
 CLES_SBV = ["sous_bassin_de_vie", "annee"]
@@ -470,11 +544,12 @@ print("Bassins de vie :", table_longue["BV2022"].nunique(),
 #     une chaîne "2020_01004_1_maison" ne permettrait pas de les retrouver.
 #     type_bien seulement dans l'index (commun.py fait groupby("type_bien") : ambigu s'il était aussi en colonne) ;
 #     annee dans l'index ET en colonne (commun.decouper fait table["annee"]).
-#     Colonnes retirées (liste écrite) : les 4 millésimes, annee_faits et annee_ventes (= annee - 1),
+#     Colonnes retirées (liste écrite) : les 4 millésimes, annee_rp_menages (année du recensement utilisé),
+#     annee_faits et annee_ventes (= annee - 1),
 #     et une variable par couple redondant (audit de la table : |rho| de 0,78 à 0,88 avec la variable gardée)
 NIVEAUX_INDEX = ["annee", "sous_bassin_de_vie", "type_bien"]
 COLONNES_A_RETIRER = ["millesime_lovac", "millesime_bpe", "millesime_rp", "millesime_filosofi",
-                      "annee_faits", "annee_ventes",
+                      "annee_rp_menages", "annee_faits", "annee_ventes",
                       "part_suroccupes", "part_parking", "taux3_destructions"]   # redondantes (audit de la table)
  
 absentes = sorted(set(COLONNES_A_RETIRER) - set(table_longue.columns))
