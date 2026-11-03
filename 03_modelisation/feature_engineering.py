@@ -1,8 +1,9 @@
 """
 Feature engineering - une table par source, jointe à la cible au sous-bassin de vie
 ===================================================================================
-Auteurs      : Cécile, Théophile & Gabrielle (jointures aux sous-bassins)
-Date         : 29/10/2026
+Auteurs      : Cécile, Théophile, Gabrielle (jointures aux sous-bassins)
+               & Christian (superficie des arrondissements)
+Date         : 29/10/2026, mis à jour le 03/11/2026
 Description  : délinquance, LOVAC, équipements (BPE 2025), densité de population,
                parc de logements (recensement 2022), Filosofi et DVF+ (volume de ventes).
                Pour chaque source : préparation à la commune, rattachement aux
@@ -207,60 +208,14 @@ print("--- [3 bis] DENSITÉ DE POPULATION ---")
 
 superficie = pd.read_parquet(DATA_OUT / "communes_superficie_2026.parquet")
 
-# 3b.1 Arrondissements de Paris, Lyon, Marseille : absents du fichier des superficies.
-#      Superficie de la ville répartie entre ses arrondissements au prorata de leur population 2024
-#      (chaque arrondissement prend la densité de sa ville). La ville entière est retirée.
-VILLES_ARRONDISSEMENTS = {"75056": r"^751\d\d$", "69123": r"^6938\d$", "13055": r"^132\d\d$"}
-morceaux = [superficie[~superficie["code_commune"].isin(VILLES_ARRONDISSEMENTS)]]
-for ville, motif in VILLES_ARRONDISSEMENTS.items():
-    arr = pop_2024[pop_2024["code_commune"].str.match(motif)].copy()
-    sup_ville = superficie.loc[superficie["code_commune"] == ville, "superficie_km2"].iloc[0]
-    arr["superficie_km2"] = sup_ville * arr["insee_pop"] / arr["insee_pop"].sum()
-    morceaux.append(arr[["code_commune", "superficie_km2"]])
-superficie_com = pd.concat(morceaux, ignore_index=True)
-assert superficie_com["code_commune"].is_unique, "Commune en double dans les superficies"
-print("Arrondissements ajoutés :", len(superficie_com) - len(morceaux[0]), "(45 attendus)")
-
-# 3b.1 bis [AVENANT] Superficies réelles des arrondissements (remplace le prorata ci-dessus)
-#      Le prorata donne à chaque arrondissement la densité de sa ville (biais : Paris 2e et 16e
-#      auraient la même densité). Les 45 superficies réelles viennent de geo.api.gouv.fr
-#      (type arrondissement-municipal, surface en hectares), récupérées par
-#      00_telechargement/telechargement_superficie_arrondissements.py, puis mises en forme par
-#      Pipeline_Referentiel_geographique.ipynb (étape 8 bis) -> etape_4_superficie_arrondissements.csv.
-#      Le bloc 3b.1 de l'équipe est conservé tel quel : le prorata reste disponible en comparaison.
-from config import DATA_RAW
-
-fichier_arr = DATA_RAW / "etape_4_superficie_arrondissements.csv"
-if not fichier_arr.exists():
-    raise FileNotFoundError(f"{fichier_arr} introuvable : lancer 00_telechargement/telechargement_superficie_arrondissements.py, "
-                            "puis Pipeline_Referentiel_geographique.ipynb, et copier son export (outputs/) dans data/raw.")
-arr_reel = (pd.read_csv(fichier_arr, sep=";", encoding="utf-8-sig", dtype={"CODE_ARRONDISSEMENT": str})
-              .rename(columns={"CODE_ARRONDISSEMENT": "code_commune", "SUPERFICIE_KM2": "superficie_km2"})
-              [["code_commune", "superficie_km2"]])
-arr_reel["code_commune"] = arr_reel["code_commune"].str.zfill(5)
-assert len(arr_reel) == 45 and arr_reel["code_commune"].is_unique, "45 arrondissements uniques attendus"
-assert (arr_reel["superficie_km2"] > 0).all(), "Superficie nulle ou vide"
-assert set(arr_reel["code_commune"]) <= set(pop_2024["code_commune"]), "Arrondissement absent de la population 2024"
-
-# Contrôle d'unité : la somme des arrondissements doit être proche de la superficie de la ville (±10 %)
-controle = []
-for ville, motif in VILLES_ARRONDISSEMENTS.items():
-    somme = arr_reel.loc[arr_reel["code_commune"].str.match(motif), "superficie_km2"].sum()
-    sup_ville = superficie.loc[superficie["code_commune"] == ville, "superficie_km2"].iloc[0]
-    controle.append({"ville": ville, "somme_arrondissements_km2": round(somme, 1),
-                     "superficie_ville_km2": round(sup_ville, 1), "ecart_%": round((somme / sup_ville - 1) * 100, 1)})
-controle = pd.DataFrame(controle)
-print(controle.to_string(index=False))
-assert (controle["ecart_%"].abs() < 10).all(), "Somme des arrondissements très éloignée de la ville : unité ou source à vérifier"
-
-# 3b.1 ter [AVENANT] La superficie réelle remplace le prorata pour les arrondissements
-if "superficie_com_prorata" not in globals():
-    superficie_com_prorata = superficie_com.copy()      # version prorata de l'équipe, gardée pour comparaison
-base = superficie[~superficie["code_commune"].isin(VILLES_ARRONDISSEMENTS)]
-superficie_com = pd.concat([base, arr_reel[["code_commune", "superficie_km2"]]], ignore_index=True)
-assert superficie_com["code_commune"].is_unique, "Commune en double dans les superficies"
-print("Arrondissements avec superficie réelle :", len(superficie_com) - len(base), "(45 attendus)")
-
+# 3b.1 Paris, Lyon, Marseille : la table des superficies (bloc 1 de la préparation) donne déjà
+#      les 45 arrondissements avec leur superficie réelle, et plus la ville entière
+VILLES_ENTIERES = ["75056", "69123", "13055"]
+assert not superficie["code_commune"].isin(VILLES_ENTIERES).any(), "Ville entière présente : superficie comptée deux fois"
+n_arrondissements = superficie["code_commune"].str.match(r"^(751\d\d|6938\d|132\d\d)$").sum()
+assert n_arrondissements == 45, f"{n_arrondissements} arrondissements au lieu de 45 : relancer le bloc 1 de la préparation"
+superficie_com = superficie
+print("Arrondissements avec leur superficie :", n_arrondissements, "(45 attendus)")
 
 # 3b.2 Superficie additionnée au sous-bassin, densité = habitants 2024 / km²
 com_sup = pd.merge(liaison, superficie_com, left_on="CODGEO_INI", right_on="code_commune")
@@ -274,14 +229,14 @@ densite = final_densite.drop_duplicates("sous_bassin_de_vie")["densite_populatio
 print(densite.describe().round(0).to_string())
 print("Sous-bassins de la cible sans densité :", densite.isna().sum())
 
-# 3b.4 [AVENANT] Contrôle : les arrondissements d'une même ville n'ont plus la même densité
-#      (avec le prorata, tous prenaient la densité de leur ville)
+# 3b.4 Contrôle : la densité varie d'un arrondissement à l'autre d'une même ville
+#      (avec une superficie répartie au prorata de la population, tous auraient la densité de leur ville)
 dens = sbv_densite.set_index("sous_bassin_de_vie")["densite_population"]
 resume = []
 for ville, motif, n_attendu in [("Paris", r"^751\d\d$", 20), ("Lyon", r"^6938\d$", 9), ("Marseille", r"^132\d\d$", 16)]:
     d = dens[dens.index.astype(str).str.match(motif)]
     assert len(d) == n_attendu, f"{ville} : {len(d)} arrondissements au lieu de {n_attendu}"
-    assert d.round(0).nunique() > 1, f"{ville} : densités identiques, le prorata est encore appliqué"
+    assert d.round(0).nunique() > 1, f"{ville} : densités identiques, superficie des arrondissements à vérifier"
     resume.append({"ville": ville, "arrondissements": len(d),
                    "densite_min": round(d.min()), "densite_max": round(d.max())})
 print(pd.DataFrame(resume).to_string(index=False))
@@ -487,16 +442,40 @@ table_longue = table_longue.merge(prix_annee_precedente, on=["sous_bassin_de_vie
  
 assert len(table_longue) == 2 * len(df), "Nombre de lignes modifié par le calcul de prix_n1"
 print("prix_n1 renseigné :", int(table_longue["prix_n1"].notna().sum()), "lignes sur", len(table_longue))
+
+
+# 8.3 bis BV2022 : bassin de vie de chaque sous-bassin. Identifiant pour le bootstrap par bassin de vie
+#          de commun.tester (les sous-bassins d'un même bassin ne sont pas indépendants) ; jamais une feature (8.5).
+#          Ajouté avant 8.4, tant que sous_bassin_de_vie est encore une colonne
+#          Lu dans le code du sous-bassin (et non dans la colonne BV2022 de la liaison : les sous-bassins viennent
+#          des bassins de communes-france-2026, BV2022 du fichier Insee, qui ne concordent pas toujours)
+# Bassin de vie lu dans le code du sous-bassin : "01004_1" -> "01004" ; bassin non scindé -> son propre code
+table_longue["BV2022"] = table_longue["sous_bassin_de_vie"].str.split("_").str[0]
+
+# Arrondissements de Paris, Lyon, Marseille : le sous-bassin porte le code de l'arrondissement,
+# on lui donne le bassin de vie de sa ville (table de liaison, une ligne par code)
+arrondissement = table_longue["sous_bassin_de_vie"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
+bv_des_communes = liaison.set_index("CODGEO_INI")["BV2022"]
+table_longue.loc[arrondissement, "BV2022"] = table_longue.loc[arrondissement, "sous_bassin_de_vie"].map(bv_des_communes)
+
+# Contrôles : chaque sous-bassin a un et un seul bassin de vie
+assert table_longue["BV2022"].notna().all(), "Des sous-bassins n'ont pas de bassin de vie"
+assert table_longue.groupby("sous_bassin_de_vie")["BV2022"].nunique().eq(1).all(), "Un sous-bassin a plusieurs bassins de vie"
+print("Bassins de vie :", table_longue["BV2022"].nunique(),
+      "| sous-bassins :", table_longue["sous_bassin_de_vie"].nunique(),
+      "| arrondissements :", int(arrondissement.sum() / table_longue["annee"].nunique() / 2))
  
  
 # 8.4 Index à 3 niveaux (annee, sous_bassin_de_vie, type_bien) : les codes de sous-bassin contiennent déjà un "_",
 #     une chaîne "2020_01004_1_maison" ne permettrait pas de les retrouver.
 #     type_bien seulement dans l'index (commun.py fait groupby("type_bien") : ambigu s'il était aussi en colonne) ;
 #     annee dans l'index ET en colonne (commun.decouper fait table["annee"]).
-#     Colonnes retirées (liste écrite) : les 4 millésimes, annee_faits et annee_ventes (= annee - 1)
+#     Colonnes retirées (liste écrite) : les 4 millésimes, annee_faits et annee_ventes (= annee - 1),
+#     et une variable par couple redondant (audit de la table : |rho| de 0,78 à 0,88 avec la variable gardée)
 NIVEAUX_INDEX = ["annee", "sous_bassin_de_vie", "type_bien"]
 COLONNES_A_RETIRER = ["millesime_lovac", "millesime_bpe", "millesime_rp", "millesime_filosofi",
-                      "annee_faits", "annee_ventes"]
+                      "annee_faits", "annee_ventes",
+                      "part_suroccupes", "part_parking", "taux3_destructions"]   # redondantes (audit de la table)
  
 absentes = sorted(set(COLONNES_A_RETIRER) - set(table_longue.columns))
 assert not absentes, f"Colonnes à retirer introuvables : {absentes}"
@@ -511,13 +490,15 @@ print(table_longue.shape)
  
  
 # 8.5 Cible, colonnes hors modèle, features ; ligne utilisable = prix et prix_n1 renseignés
+#     Hors modèle : n_ventes (fuite), BV2022 (identifiant) et, selon l'étape 0 de la modélisation, annee
 CIBLE = "prix"
 ANNEE_EN_FEATURE = False      # à aligner sur la décision de l'étape 0 de la modélisation
-HORS_MODELE = ["n_ventes"] + ([] if ANNEE_EN_FEATURE else ["annee"])
+HORS_MODELE = ["n_ventes", "BV2022"] + ([] if ANNEE_EN_FEATURE else ["annee"])
 FEATURES = [c for c in table_longue.columns if c not in [CIBLE] + HORS_MODELE]
  
 assert "prix_n1" in FEATURES and "maison" in FEATURES
 assert "n_ventes" not in FEATURES, "n_ventes (ventes de l'année N) ne doit jamais être une feature"
+assert "BV2022" not in FEATURES, "BV2022 est un identifiant, jamais une feature"
 assert "appartement" not in table_longue.columns
  
 utilisable = table_longue[CIBLE].notna() & table_longue["prix_n1"].notna()

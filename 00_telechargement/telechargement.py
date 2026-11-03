@@ -3,7 +3,8 @@
 # =============================================================================
 # Télécharge les sources brutes depuis le Google Drive du projet
 # (dossier "compagnon_immo/raw", lisible par toute personne ayant le lien)
-# et les range dans data/raw/.
+# et les range dans data/raw/. Une source vient directement d'une API publique
+# (superficie des arrondissements) : sa réponse est enregistrée telle quelle.
 #
 # Utilisation, depuis la racine du projet :
 #   python 00_telechargement/telechargement.py              -> affiche la liste des sources
@@ -15,10 +16,13 @@
 # il suffit de relancer la même commande plus tard : seuls les fichiers manquants
 # sont téléchargés.
 
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import gdown
+import requests
 
 # Permet d'importer config.py, qui se trouve dans le dossier parent
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -33,6 +37,7 @@ from config import DATA_RAW, DATA_OUT
 # (la suite de caractères dans le lien de partage) et le nom local.
 # Par défaut, une source est rangée dans data/raw/ ; "dossier" permet de la
 # ranger ailleurs (data/processed/ pour un fichier déjà préparé).
+# Type "api" : pas d'identifiant Drive, mais l'adresse de l'API et ses paramètres.
 
 SOURCES = {
     "dvf": {
@@ -137,6 +142,14 @@ SOURCES = {
         "id": "1w2WFp_Rw2MwUq0HZX7E1b7UmKhipmXSW",
         "nom": "communes-france-2026.csv",
     },
+    # Superficie des 45 arrondissements de Paris, Lyon et Marseille, en hectares
+    # (absents du référentiel des communes) : API Découpage administratif
+    "superficie_arrondissements": {
+        "type": "api",
+        "url": "https://geo.api.gouv.fr/communes",
+        "params": {"type": "arrondissement-municipal", "fields": "code,nom,surface", "format": "json"},
+        "nom": "superficie_arrondissements_geoapi.json",
+    },
 }
 
 
@@ -150,12 +163,12 @@ def telecharger(cle):
     destination = source.get("dossier", DATA_RAW) / source["nom"]
 
     # Lien Drive pas encore renseigné dans le catalogue
-    if source["id"] == "A_COMPLETER":
+    if source.get("id") == "A_COMPLETER":
         print(f"[échec] {source['nom']} : lien Drive à renseigner dans le catalogue SOURCES")
         return False
 
     # Fichier déjà présent : on ne refait pas le téléchargement
-    if source["type"] == "fichier" and destination.exists():
+    if source["type"] in ("fichier", "api") and destination.exists():
         print(f"[déjà présent] {source['nom']}")
         return True
 
@@ -164,6 +177,15 @@ def telecharger(cle):
         if source["type"] == "fichier":
             url = f"https://drive.google.com/uc?id={source['id']}"
             gdown.download(url, str(destination), quiet=False, resume=True, retries=2)
+        elif source["type"] == "api":
+            reponse = requests.get(source["url"], params=source["params"], timeout=60)
+            reponse.raise_for_status()
+            destination.write_bytes(reponse.content)      # réponse conservée telle quelle
+            # La réponse d'une API peut changer : on garde l'adresse et la date de récupération
+            meta = {"url": reponse.url,
+                    "date_recuperation_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+            destination.with_suffix(".meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                                                             encoding="utf-8")
         else:
             # Pour un dossier, on relance toujours : resume=True saute les fichiers
             # déjà complets et ne télécharge que ceux qui manquent

@@ -239,13 +239,34 @@ print("Nombre de territoires :", df_merged["sous_bassin_de_vie"].nunique())
 df_merged.to_parquet(DATA_OUT / "liaison_bv_scindes.parquet", index=False)
 
 # --- Superficie de chaque commune 2026 (km²), pour la densité calculée au feature engineering ---
-# Paris, Lyon, Marseille en ville entière : les arrondissements sont absents du fichier
+# Paris, Lyon, Marseille : le référentiel ne donne que la ville entière. Elle est remplacée par ses
+# 45 arrondissements, avec leur superficie réelle (API Découpage administratif, en hectares)
 superficie = pd.read_csv(DATA_RAW / "communes-france-2026.csv", usecols=["code_insee", "superficie_km2"],
                          dtype={"code_insee": str})
 superficie["code_insee"] = superficie["code_insee"].str.zfill(5)
 superficie = superficie.rename(columns={"code_insee": "code_commune"})
-print("Bloc 1 - superficie : communes :", len(superficie),
-      "| une commune = une ligne :", superficie["code_commune"].is_unique,
+
+arrondissements = pd.read_json(DATA_RAW / "superficie_arrondissements_geoapi.json", dtype={"code": str})
+arrondissements = arrondissements.rename(columns={"code": "code_commune"})
+arrondissements["superficie_km2"] = arrondissements["surface"] / 100      # 1 km² = 100 hectares
+arrondissements = arrondissements[["code_commune", "superficie_km2"]]
+
+# Contrôles : 45 arrondissements, surfaces positives, somme proche de la superficie de la ville
+# (moins de 10 % d'écart : détecte une erreur d'unité, pas une imprécision)
+VILLES_ARRONDISSEMENTS = {"75056": r"^751\d\d$", "69123": r"^6938\d$", "13055": r"^132\d\d$"}
+assert len(arrondissements) == 45 and arrondissements["code_commune"].is_unique, "45 arrondissements uniques attendus"
+assert (arrondissements["superficie_km2"] > 0).all(), "Superficie d'arrondissement nulle ou vide"
+for ville, motif in VILLES_ARRONDISSEMENTS.items():
+    somme = arrondissements.loc[arrondissements["code_commune"].str.match(motif), "superficie_km2"].sum()
+    sup_ville = superficie.loc[superficie["code_commune"] == ville, "superficie_km2"].iloc[0]
+    print(f"Bloc 1 - superficie {ville} : ville {sup_ville:.1f} km² | somme des arrondissements {somme:.1f} km²")
+    assert abs(somme / sup_ville - 1) < 0.10, f"{ville} : somme des arrondissements éloignée de la ville (unité ?)"
+
+# Ville entière retirée, arrondissements ajoutés : la superficie n'est comptée qu'une fois
+superficie = pd.concat([superficie[~superficie["code_commune"].isin(VILLES_ARRONDISSEMENTS)], arrondissements],
+                       ignore_index=True)
+print("Bloc 1 - superficie : communes et arrondissements :", len(superficie),
+      "| un code = une ligne :", superficie["code_commune"].is_unique,
       "| sans superficie :", superficie["superficie_km2"].isna().sum())
 superficie.to_parquet(DATA_OUT / "communes_superficie_2026.parquet", index=False)
 
