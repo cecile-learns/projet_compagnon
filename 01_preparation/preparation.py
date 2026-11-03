@@ -532,14 +532,15 @@ print("Bloc 6 - communes :", len(menages_com),
       "| communes sans ménage :", men.isna().sum())
 menages_com.to_parquet(DATA_OUT / "menages_commune_2022.parquet", index=False)
 
-# --- Partie 2 : par bassin de vie et par sous-bassin, 2019 à 2024 ---
-# 2023 : copie de 2022 (pas encore de recensement publié).
-# 2024 : 2022 + évolution 2020-2022, bornée pour éviter les valeurs extrêmes.
-# Les tests de stabilité qui justifient ces deux choix sont dans le notebook.
+# --- Partie 2 : par commune et par année, recensements 2019 à 2022 ---
+# Effectifs seulement, pour qu'ils s'additionnent à n'importe quelle maille.
+# Rattachement aux sous-bassins, ratios en % et prolongement à 2023 (copie de
+# 2022) et 2024 (2022 + évolution 2020-2022 bornée) : feature engineering,
+# section 5 bis. Les tests de stabilité qui justifient ces choix sont dans le notebook.
 ANNEES_RP = [2019, 2020, 2021, 2022]
 dossier_menages = DATA_RAW / "base-ic-couples-familles-menages-2022_csv"
-EFFECTIFS_BV = ["C_MEN", "C_MENPSEUL", "C_PMEN", "C_FAM",
-                "C_FAMMONO", "C_COUPSENF", "C_NE24F3", "C_NE24F4P"]
+EFFECTIFS_MENAGES = ["C_MEN", "C_MENPSEUL", "C_PMEN", "C_FAM",
+                     "C_FAMMONO", "C_COUPSENF", "C_NE24F3", "C_NE24F4P"]
 
 # --- Lecture de chaque millésime, année retirée des noms (C19_MEN -> C_MEN), somme par commune ---
 morceaux = []
@@ -547,76 +548,19 @@ for an in ANNEES_RP:
     df = pd.read_csv(dossier_menages / f"base-ic-couples-familles-menages-{an}.CSV",
                      sep=";", dtype={"IRIS": str, "COM": str}, low_memory=False)
     df.columns = [re.sub(rf"^([CP]){str(an)[2:]}_", r"\1_", c) for c in df.columns]
-    com_an = df.groupby("COM", as_index=False)[EFFECTIFS_BV].sum(min_count=1)
+    com_an = df.groupby("COM", as_index=False)[EFFECTIFS_MENAGES].sum(min_count=1)
     com_an["annee"] = an
     morceaux.append(com_an)
 menages_com_an = pd.concat(morceaux, ignore_index=True)
 
-
-# --- Ratios (vides si le dénominateur vaut 0) ---
-def part_pct(numerateur, denominateur):
-    """Part en % ; vide si le dénominateur vaut 0."""
-    return numerateur / denominateur.where(denominateur > 0) * 100
-
-
-RATIOS_BV = ["taux_personnes_seules_pct_men", "part_familles_monoparentales_pct_fam",
-             "part_familles_nombreuses_pct_fam", "part_couples_sans_enfants_pct_fam",
-             "taille_moyenne_menage"]
-BORNES = {
-    "taux_personnes_seules_pct_men": 1.5,
-    "part_familles_monoparentales_pct_fam": 1.5,
-    "part_familles_nombreuses_pct_fam": 1.0,
-    "part_couples_sans_enfants_pct_fam": 1.5,
-    "taille_moyenne_menage": 0.03,
-}
-
-# --- Même calcul pour les deux mailles (table de liaison du bloc 1) ---
-liaison_bv = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet",
-                             columns=["CODGEO_INI", "BV2022", "sous_bassin_de_vie", "TYPE_BV2022"])
-for nom_maille, maille in {"bv": "BV2022", "sbv": "sous_bassin_de_vie"}.items():
-
-    # Rattachement des communes à la maille
-    res = menages_com_an.merge(liaison_bv[["CODGEO_INI", maille, "TYPE_BV2022"]],
-                               left_on="COM", right_on="CODGEO_INI", how="left", validate="many_to_one")
-    print(f"Bloc 6 ({nom_maille}) - lignes commune x année sans territoire, retirées :", res[maille].isna().sum())
-    res = res.dropna(subset=[maille])
-
-    # Somme par territoire et par année
-    bv = res.groupby([maille, "TYPE_BV2022", "annee"], as_index=False, dropna=False).agg(
-        nb_communes=("COM", "size"), **{c: (c, "sum") for c in EFFECTIFS_BV})
-
-    # Ratios
-    bv["taux_personnes_seules_pct_men"] = part_pct(bv["C_MENPSEUL"], bv["C_MEN"])
-    bv["part_familles_monoparentales_pct_fam"] = part_pct(bv["C_FAMMONO"], bv["C_FAM"])
-    bv["part_familles_nombreuses_pct_fam"] = part_pct(bv["C_NE24F3"] + bv["C_NE24F4P"], bv["C_FAM"])
-    bv["part_couples_sans_enfants_pct_fam"] = part_pct(bv["C_COUPSENF"], bv["C_FAM"])
-    bv["taille_moyenne_menage"] = bv["C_PMEN"] / bv["C_MEN"].where(bv["C_MEN"] > 0)
-    bv[RATIOS_BV] = bv[RATIOS_BV].round(2)
-
-    # 2023 : copie de 2022
-    an_2023 = bv[bv["annee"] == 2022].assign(annee=2023)
-
-    # 2024 : 2022 + évolution 2020-2022, bornée (en points de %, en personnes pour la taille)
-    r_2020 = bv[bv["annee"] == 2020].set_index(maille)
-    r_2022 = bv[bv["annee"] == 2022].set_index(maille)
-    communs = r_2022.index.intersection(r_2020.index)
-    evolution = r_2022.loc[communs, RATIOS_BV] - r_2020.loc[communs, RATIOS_BV]
-    for col, borne in BORNES.items():
-        evolution[col] = evolution[col].clip(lower=-borne, upper=borne)
-    an_2024 = r_2022.loc[communs].copy()
-    an_2024[RATIOS_BV] = (an_2024[RATIOS_BV] + evolution).round(2)
-    an_2024["annee"] = 2024
-    an_2024 = an_2024.reset_index()
-
-    # Table finale, contrôles et enregistrement
-    colonnes_bv = [maille, "TYPE_BV2022", "annee", "nb_communes", "C_MEN", "C_FAM"] + RATIOS_BV
-    menages_bv = pd.concat([bv, an_2023, an_2024], ignore_index=True)[colonnes_bv]
-    menages_bv = menages_bv.sort_values([maille, "annee"]).reset_index(drop=True)
-    print(f"Bloc 6 ({nom_maille}) - lignes :", len(menages_bv),
-          "| territoires :", menages_bv[maille].nunique(),
-          "| un territoire x année = une ligne :", not menages_bv.duplicated([maille, "annee"]).any(),
-          "| territoires sans 2024 :", menages_bv[maille].nunique() - len(an_2024))
-    menages_bv.to_parquet(DATA_OUT / f"menages_{nom_maille}_2019_2024.parquet", index=False)
+# --- Contrôles et enregistrement (codes commune de chaque millésime, rattachés au FE) ---
+menages_com_an = menages_com_an.rename(columns={"COM": "code_commune"})
+menages_com_an = menages_com_an[["code_commune", "annee"] + EFFECTIFS_MENAGES]
+print("Bloc 6 (partie 2) - lignes :", len(menages_com_an),
+      "| années :", sorted(menages_com_an["annee"].unique()),
+      "| une commune x année = une ligne :", not menages_com_an.duplicated(["code_commune", "annee"]).any(),
+      "| effectifs vides :", menages_com_an[EFFECTIFS_MENAGES].isna().sum().sum())
+menages_com_an.to_parquet(DATA_OUT / "menages_commune_2019_2022.parquet", index=False)
 
 
 # =============================================================================
