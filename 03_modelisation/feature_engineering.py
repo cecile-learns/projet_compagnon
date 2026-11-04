@@ -3,7 +3,7 @@ Feature engineering - une table par source, jointe à la cible au sous-bassin de
 ===================================================================================
 Auteurs      : Cécile, Théophile, Gabrielle (jointures aux sous-bassins)
                & Christian (superficie des arrondissements)
-Date         : 29/10/2026, mis à jour le 03/11/2026
+Date         : 29/10/2026, mis à jour le 04/11/2026
 Description  : délinquance, LOVAC, équipements (BPE 2025), densité de population,
                parc de logements (recensement 2022), Filosofi, ménages (recensements
                2019-2022) et DVF+ (volume de ventes).
@@ -11,7 +11,8 @@ Description  : délinquance, LOVAC, équipements (BPE 2025), densité de populat
                sous-bassins (liaison_bv_scindes), agrégation, jointure à gauche
                sur la cible (cible_sbv_annee), export fe_cible_<source>_sbv.parquet.
                Constats et justifications : notebook feature_engineering.ipynb
-               (même code, mêmes noms de fichiers).
+               (même code, mêmes noms de fichiers ; ce .py est la version de référence,
+               toute modification se fait dans les deux).
                Taux des crédits : non retenus dans le modèle annuel (voir notebook).
 """
 
@@ -358,6 +359,34 @@ com_menages = pd.merge(liaison, df_menages, left_on="CODGEO_INI", right_on="code
 print("Lignes commune x année sans sous-bassin, retirées :", len(df_menages) - len(com_menages))
 eff_menages = com_menages.groupby(["sous_bassin_de_vie", "annee"])[EFFECTIFS_MENAGES].sum()
 sbv_menages = indicateurs_menages(eff_menages).reset_index()
+
+# 5b.1 bis Stabilité des indicateurs entre recensements (justifie 2023 = 2022 et le prolongement de 2024)
+#          Écart absolu par sous-bassin entre deux années, comparé à un seuil
+#          (points de % pour les parts, personnes pour la taille des ménages)
+def ecarts_entre_annees(table, debut, fin, seuils):
+    """Écart absolu de chaque indicateur entre deux années, par sous-bassin, comparé à un seuil."""
+    pivot = table[table["annee"].isin([debut, fin])].pivot(index="sous_bassin_de_vie", columns="annee",
+                                                            values=RATIOS_MENAGES)
+    lignes = []
+    for r in RATIOS_MENAGES:
+        ecart = (pivot[(r, fin)] - pivot[(r, debut)]).abs().dropna()
+        lignes.append({"indicateur": r,
+                       "seuil": seuils[r],
+                       "écart médian": round(ecart.median(), 3),
+                       "écart max": round(ecart.max(), 2),
+                       "sous-bassins au-delà du seuil (%)": round((ecart > seuils[r]).mean() * 100, 1)})
+    print(f"{debut} -> {fin} : {len(pivot)} sous-bassins comparés")
+    return pd.DataFrame(lignes).set_index("indicateur")
+
+
+SEUILS_1AN = {"taux_personnes_seules_pct_men": 1.5, "part_familles_monoparentales_pct_fam": 1.5,
+              "part_familles_nombreuses_pct_fam": 1.0, "part_couples_sans_enfants_pct_fam": 1.5,
+              "taille_moyenne_menage": 0.02}
+SEUILS_2ANS = {"taux_personnes_seules_pct_men": 2.0, "part_familles_monoparentales_pct_fam": 2.0,
+               "part_familles_nombreuses_pct_fam": 1.5, "part_couples_sans_enfants_pct_fam": 2.0,
+               "taille_moyenne_menage": 0.03}
+print(ecarts_entre_annees(sbv_menages, 2021, 2022, SEUILS_1AN).to_string())
+print(ecarts_entre_annees(sbv_menages, 2020, 2022, SEUILS_2ANS).to_string())
 
 # 5b.2 2023 : copie de 2022 (pas encore de recensement publié) ;
 #      2024 : 2022 + évolution 2020-2022, bornée pour éviter les valeurs extrêmes

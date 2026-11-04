@@ -4,6 +4,7 @@
 # Fixe la table, le découpage, la prévision naïve, le calcul des erreurs
 # et le test de comparaison avec la naïve.
 # Chaque notebook de modélisation l'importe : personne ne réécrit ces fonctions.
+# Contrôles de ce fichier et des gabarits : test.py (python test.py depuis 03_modelisation).
 
 import sys
 from pathlib import Path
@@ -33,11 +34,12 @@ N_ANNEES_MIN_PLI = 1          # années d'apprentissage minimales par pli (déci
 # Colonnes qui ne sont PAS des variables explicatives : elles ne comptent pas pour le masque.
 # - cible et comptages de ventes ;
 # - variables de contrôle qualité (hors modèle, voir 1.4 de la feuille de route) ;
-# - 'annee' et 'maison' : identifiants.
+# - 'annee' et 'maison' : identifiants ; 'BV2022' : bassin de vie, identifiant du bootstrap de tester (P2).
 # À COMPLÉTER PAR L'ÉQUIPE : les variables non retenues (ex. structure des ménages)
 # doivent être ajoutées ici, sinon une case vide dans l'une d'elles retirerait des lignes pour rien.
 HORS_MASQUE = ["annee", "maison", CIBLE, "n_ventes", "nb_ventes_n1",
-               "part_indicateurs_estimes", "part_logements_taux_impute", "part_menages_couverts"]
+               "part_indicateurs_estimes", "part_logements_taux_impute", "part_menages_couverts",
+               "BV2022"]
 
 
 def masque_lignes_communes(table, variables=None):
@@ -128,25 +130,32 @@ def evaluer(nom, evaluation, prevision, resultats):
 def tester(nom, evaluation, prevision, tests):
     """Le modèle fait-il vraiment mieux que la naïve ? Deux tests, par type de bien.
 
-    On compare, bassin par bassin, l'erreur du modèle et celle de la naïve :
+    On compare, sous-bassin par sous-bassin, l'erreur du modèle et celle de la naïve :
     écart = |erreur du modèle| - |erreur de la naïve| (négatif : le modèle fait mieux).
     - Bootstrap : combien le modèle gagne ou perd en moyenne (€/m²), avec un
-      intervalle de confiance à 95 % (bassins tirés au hasard avec remise).
-    - Wilcoxon apparié : le modèle fait-il mieux dans la plupart des bassins ?
+      intervalle de confiance à 95 %. On tire des bassins de vie avec remise, chacun
+      avec tous ses sous-bassins (P2) : les sous-bassins d'un même bassin ne sont pas
+      indépendants, les tirer un par un donnerait un intervalle trop étroit.
+    - Wilcoxon apparié : le modèle fait-il mieux dans la plupart des sous-bassins ?
       Taille d'effet : corrélation rang-bisériale, entre -1 (le modèle fait mieux
       partout) et +1 (le modèle fait moins bien partout).
     """
+    assert "BV2022" in evaluation.columns, "Colonne BV2022 absente : relancer le feature engineering"
     rng = np.random.default_rng(GRAINE)
     for type_bien, e in evaluation.groupby("type_bien"):
         ecart = (np.abs(e[CIBLE] - prevision.loc[e.index])
-                 - np.abs(e[CIBLE] - prevision_naive(e))).to_numpy()
+                 - np.abs(e[CIBLE] - prevision_naive(e)))
 
-        # Bootstrap : écart moyen sur N_TIRAGES échantillons de bassins
-        tirages = rng.integers(0, len(ecart), size=(N_TIRAGES, len(ecart)))
-        moyennes = ecart[tirages].mean(axis=1)
+        # Bootstrap par bassin de vie : somme des écarts et nombre de sous-bassins de chaque bassin ;
+        # écart moyen par sous-bassin de chaque échantillon (même mesure que ecart.mean())
+        par_bassin = ecart.groupby(e["BV2022"].to_numpy()).agg(["sum", "count"])
+        sommes, comptes = par_bassin["sum"].to_numpy(), par_bassin["count"].to_numpy()
+        tirages = rng.integers(0, len(par_bassin), size=(N_TIRAGES, len(par_bassin)))
+        moyennes = sommes[tirages].sum(axis=1) / comptes[tirages].sum(axis=1)
         ic_bas, ic_haut = np.percentile(moyennes, [2.5, 97.5])
 
-        # Wilcoxon apparié (bassins à écart nul retirés) et corrélation rang-bisériale
+        # Wilcoxon apparié (sous-bassins à écart nul retirés) et corrélation rang-bisériale
+        ecart = ecart.to_numpy()
         non_nul = ecart[ecart != 0]
         if len(non_nul) > 0:
             p_value = stats.wilcoxon(non_nul).pvalue
@@ -159,4 +168,5 @@ def tester(nom, evaluation, prevision, tests):
                       "écart de MAE avec la naïve (€/m²)": ecart.mean(),
                       "IC 95 % bas (€/m²)": ic_bas, "IC 95 % haut (€/m²)": ic_haut,
                       "p-value Wilcoxon": p_value,
-                      "rang-bisériale": r})
+                      "rang-bisériale": r,
+                      "bassins de vie": len(par_bassin)})
