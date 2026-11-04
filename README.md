@@ -8,9 +8,9 @@ Le projet s'appuie sur deux axes principaux :
 
 ### 1. Analyse des données immobilières et territoriales
 
-- Prédiction de l'évolution des prix des logements selon les territoires.
-- Exploitation des ventes immobilières historiques.
-- Intégration de facteurs socio-économiques (démographie, éducation, criminalité, transports, services, etc.).
+- Prédiction du prix des logements selon les territoires (niveau du prix médian au m², pour l'achat d'un seul logement ancien par un particulier).
+- Exploitation des ventes immobilières historiques (DVF+).
+- Intégration de facteurs socio-économiques (démographie, revenus, logement, délinquance, équipements, etc.).
 
 ### 2. Exploitation des annonces immobilières
 
@@ -27,20 +27,26 @@ projet_compagnon/
 ├── README.md
 ├── .gitignore
 ├── requirements.txt
-├── config.py              ← chemins communs à tous les codes
-├── data/                  ← local, jamais sur GitHub
-│   ├── raw/               ← sources brutes (00_telechargement)
-│   └── processed/         ← fichiers créés par nos codes (01_preparation)
+├── config.py                       ← chemins communs à tous les codes
+├── data/                           ← local, jamais sur GitHub
+│   ├── raw/                        ← sources brutes (00_telechargement)
+│   └── processed/                  ← fichiers créés par nos codes
 ├── 00_telechargement/
 │   └── telechargement.py
 ├── 01_preparation/
-│   ├── preparation.py     ← version courte, commentée
-│   └── preparation.ipynb  ← même code, avec les explications
+│   ├── preparation.py              ← version courte, commentée
+│   └── preparation.ipynb           ← même code, avec les explications
 ├── 02_audit_eda/
-│   ├── audits.ipynb       ← audit de chaque source
-│   ├── eda.ipynb          ← analyse exploratoire : cible, relations, synthèse
-│   └── audits_eda.py      ← version script des deux notebooks
-└── 03_modelisation/       ← à venir
+│   ├── audits.ipynb                ← audit de chaque source
+│   ├── eda.ipynb                   ← analyse exploratoire : cible, relations, synthèse
+│   ├── audits_eda.py               ← version script des deux notebooks
+│   └── audit_complementaire.ipynb  ← audits et EDA faits après le premier rapport
+└── 03_modelisation/
+    ├── feature_engineering.py      ← table de modélisation (version de référence)
+    ├── feature_engineering.ipynb   ← même code, avec les constats et justifications
+    ├── commun.py                   ← partie commune à toutes les modélisations
+    ├── gabarit_hierarchique.py     ← gabarit du modèle hiérarchique
+    └── test.py                     ← contrôles de commun.py et des gabarits
 ```
 
 GitHub ne contient que du code. Les données sont sur un Google Drive partagé, lisible par toute personne ayant le lien : https://drive.google.com/drive/folders/1bVlZgMTxjtoWMveHXJEsxY6LPRo6U6nZ
@@ -92,6 +98,33 @@ python 02_audit_eda/audits_eda.py eda       # EDA seulement
 
 ou exécuter `02_audit_eda/audits.ipynb` et `02_audit_eda/eda.ipynb`, qui contiennent les interprétations. Le script affiche les tableaux dans la console et enregistre les graphiques dans `02_audit_eda/figures/`. Les cartes de l'EDA ont besoin d'un accès à internet (contours des départements et des communes).
 
+`02_audit_eda/audit_complementaire.ipynb` regroupe les audits et l'EDA faits après le premier rapport (nouvelles sources, maille du bassin de vie).
+
+### 4. Feature engineering et table de modélisation
+
+```bash
+python 03_modelisation/feature_engineering.py
+```
+
+ou exécuter `03_modelisation/feature_engineering.ipynb` (même code, avec les constats de l'EDA qui justifient chaque choix). Le `.py` est la version de référence : toute modification se fait dans les deux.
+
+Pour chaque source : rattachement des communes aux sous-bassins, agrégation, jointure à gauche sur la cible, export `fe_cible_<source>_sbv.parquet`. Puis fusion des sources et construction de `table_modelisation_bv.parquet` (voir plus bas).
+
+### 5. Modélisation
+
+Chaque notebook de modélisation importe `03_modelisation/commun.py`, qui fixe pour toute l'équipe :
+
+- la table et le masque des lignes communes (`charger_table`) ;
+- le découpage temporel (`decouper`, `fenetres`, `plis_temporels`) ;
+- la prévision naïve (prix N = prix N-1) ;
+- le tableau commun des erreurs (`evaluer`) et le test contre la naïve (`tester` : bootstrap par bassin de vie et Wilcoxon apparié).
+
+Contrôles de `commun.py` et des gabarits :
+
+```bash
+python 03_modelisation/test.py
+```
+
 ## Sources de données
 
 | Nom court | Source | Producteur | Période |
@@ -101,6 +134,9 @@ ou exécuter `02_audit_eda/audits.ipynb` et `02_audit_eda/eda.ipynb`, qui contie
 | `dvf_audit` | Échantillon d'audit de DVF+ (100 000 mutations) | équipe | 2014-2025 |
 | `passage_geo` | Table de passage des communes 2003-2026 | Insee | géographie 2026 |
 | `bassins_vie` | Bassins de vie 2022 | Insee | géographie 2026 |
+| `bassins_vie_2019_2022` | Bassins de vie, fichier des années 2019 à 2022 | Insee | 2019-2022 |
+| `communes` | Référentiel des communes (dont la superficie et la grille de densité) | data.gouv.fr (Insee, IGN) | géographie 2026 |
+| `superficie_arrondissements` | Superficie des 45 arrondissements de Paris, Lyon et Marseille | API Découpage administratif (geo.api.gouv.fr) | géographie actuelle |
 | `filosofi` | Revenus disponibles par commune (Filosofi) | Insee | 2014-2021 |
 | `menages` | Couples, familles, ménages (recensement) | Insee | 2019-2022 |
 | `logement` | Logement (recensement) | Insee | 2022 |
@@ -109,7 +145,6 @@ ou exécuter `02_audit_eda/audits.ipynb` et `02_audit_eda/eda.ipynb`, qui contie
 | `equipements` | Indicateurs d'équipements (BPE 2015 et 2020), table construite par l'équipe | Insee / équipe | 2015, 2020 |
 | `bpe` | Base permanente des équipements 2025 | Insee | 2025 |
 | `bpe_evolution` | Base permanente des équipements en évolution (nombre d'équipements par type et par territoire, dont le bassin de vie) | Insee | 2015, 2020, 2025 |
-| `communes` | Référentiel des communes (dont la superficie) | data.gouv.fr (Insee, IGN) | géographie 2026 |
 | `taux` | Taux des crédits immobiliers aux particuliers | Banque de France | 1998-2026 |
 | `annonces_ventes` | Annonces de vente du Haut-Rhin (axe 2) | échantillon fourni | 2019-2023 |
 | `annonces_locations` | Annonces de location du Haut-Rhin (axe 2) | échantillon fourni | — |
@@ -121,29 +156,49 @@ Tous dans `data/processed/`, au format Parquet (les codes géographiques restent
 | Bloc | Fichier | Une ligne = |
 |---|---|---|
 | 1 | `liaison_commune_bv2022.parquet` | un code commune (depuis 2003) |
+| 1 | `liaison_bv_scindes.parquet` | un code commune, avec son sous-bassin de vie |
+| 1 | `communes_superficie_2026.parquet` | une commune 2026 (Paris, Lyon, Marseille par arrondissement) |
 | 2 | `dvf_plus_residentiel.parquet` | une vente |
 | 3 | `dvf_plus_echantillon_apprentissage.parquet` | une vente de l'échantillon |
 | 4 | `cible_commune_{mois,trimestre,annee}.parquet` | une commune × une période |
 | 4 | `cible_bv_{mois,trimestre,annee}.parquet` | un bassin de vie × une période |
+| 4 | `cible_sbv_{mois,trimestre,annee}.parquet` | un sous-bassin de vie × une période |
 | 5 | `filosofi_commune_2014_2021.parquet` | une commune × une année |
 | 6 | `menages_commune_2022.parquet` | une commune |
-| 6 | `menages_bv_2019_2024.parquet` | un bassin de vie × une année |
+| 6 | `menages_commune_2019_2022.parquet` | une commune × une année de recensement |
 | 7 | `logement_commune_2022.parquet` | une commune |
 | 8 | `delinquance_commune_annee.parquet` | une commune × une année |
 | 9 | `lovac_commune_annee.parquet` | une commune × un millésime |
 | 10 | `equipements_commune_millesime.parquet` | une commune × un millésime BPE |
 | 11 | `taux_credit_{mois,trimestre,annee}.parquet` | une période |
+| 12 | `equipements_commune_2025.parquet` | une commune |
 
 **Conventions communes**
 
 - Paris, Lyon et Marseille sont codées **par arrondissement**, comme dans DVF+.
-- Toute source se rattache au bassin de vie par la table de liaison du bloc 1 (colonne `CODGEO_INI`).
-- Au bassin de vie, les taux et les parts se recalculent en additionnant les effectifs bruts conservés dans chaque fichier, jamais en faisant la moyenne des taux communaux.
+- Toute source se rattache au bassin de vie et au sous-bassin par la table de liaison du bloc 1 (colonne `CODGEO_INI`).
+- Au bassin de vie et au sous-bassin, les taux et les parts se recalculent en additionnant les effectifs bruts conservés dans chaque fichier, jamais en faisant la moyenne des taux communaux.
 - L'année 2025 est réservée au test.
+
+## Maille de modélisation : le sous-bassin de vie
+
+Les bassins de vie de 100 000 habitants ou plus sont découpés selon la grille de densité des communes : `_1` (grands centres et centres intermédiaires), `_2` (ceintures urbaines et petites villes), `_3` (rural). Les bassins plus petits gardent leur code. Chaque arrondissement de Paris, Lyon et Marseille forme son propre sous-bassin.
+
+Un prix médian n'est retenu qu'à partir de **20 ventes** dans le sous-bassin, l'année et le type de bien.
+
+## Table de modélisation
+
+`data/processed/table_modelisation_bv.parquet`, produite par `03_modelisation/feature_engineering.py`, lue par `commun.charger_table()`.
+
+- **Une ligne** = une année × un sous-bassin de vie × un type de bien (maison ou appartement). Index à 3 niveaux : `annee`, `sous_bassin_de_vie`, `type_bien`.
+- **Cible** : `prix`, prix médian au m² de l'année N.
+- **Variables explicatives** : prises sur l'année N-1 ou en photo fixe (recensement, LOVAC, BPE, Filosofi) ; `prix_n1` (prix de l'année précédente) et `maison` (indicatrice du type de bien) comprises.
+- **Hors modèle** : `n_ventes` (ventes de l'année N, sert seulement au seuil), `BV2022` (bassin de vie, identifiant du bootstrap de `commun.tester`), variables de contrôle qualité (`part_indicateurs_estimes`, `part_logements_taux_impute`, `part_menages_couverts`).
+- **Lignes exportées** : seulement celles où `prix` et `prix_n1` sont renseignés.
 
 ## Échantillon d'apprentissage DVF+
 
-`dvf_plus_echantillon_apprentissage.parquet` : 835 288 ventes d'un seul logement ancien (maison ou appartement), 2014-2023, France métropolitaine hors DOM, 53 colonnes.
+`dvf_plus_echantillon_apprentissage.parquet` : 907 306 ventes d'un seul logement ancien (maison ou appartement), 2014-2024, France métropolitaine hors DOM. Aucune vente de 2025 (année du test).
 
 **Méthode :** une vente sur dix a été tirée au hasard dans chaque département et chaque année, avec au moins 300 ventes à chaque fois (bloc 3 de la préparation). Le tirage est reproductible : graine fixée à 42.
 
@@ -153,7 +208,7 @@ import pandas as pd
 df = pd.read_parquet("../data/processed/dvf_plus_echantillon_apprentissage.parquet")
 ```
 
-Vérification au premier chargement : `df.shape` doit afficher `(835288, 53)`.
+Vérification au premier chargement : `len(df)` doit afficher `907306`.
 
 **Important : les poids `w_h`.** L'échantillon n'est pas proportionnel : les petits départements y sont surreprésentés. Pour tout calcul portant sur plusieurs départements ou plusieurs années (moyenne, médiane, part de maisons, modèle), il faut utiliser la colonne `w_h`. Par exemple :
 
