@@ -110,6 +110,14 @@ ou exécuter `03_modelisation/feature_engineering.ipynb` (même code, avec les c
 
 Pour chaque source : rattachement des communes aux sous-bassins, agrégation, jointure à gauche sur la cible, export `fe_cible_<source>_sbv.parquet`. Puis fusion des sources et construction de `table_modelisation_bv.parquet` (voir plus bas).
 
+**Raccourci (examinateur)** : la table de modélisation déjà construite peut être téléchargée directement, sans relancer la préparation ni le feature engineering :
+
+```bash
+python 00_telechargement/telechargement.py table_modelisation
+```
+
+Elle est rangée dans `data/processed/`, là où `commun.py` la lit. L'équipe, elle, reconstruit toujours la table avec le pipeline.
+
 ### 5. Modélisation
 
 Chaque notebook de modélisation importe `03_modelisation/commun.py`, qui fixe pour toute l'équipe :
@@ -132,6 +140,7 @@ python 03_modelisation/test.py
 | `dvf` | DVF+ (mutations immobilières) | Cerema | 2014-2025 |
 | `dvf_residentiel` | DVF+ filtré (bloc 2) | équipe | 2014-2025 |
 | `dvf_audit` | Échantillon d'audit de DVF+ (100 000 mutations) | équipe | 2014-2025 |
+| `table_modelisation` | Table de modélisation déjà construite (raccourci, voir étape 4) | équipe | 2015-2025 |
 | `passage_geo` | Table de passage des communes 2003-2026 | Insee | géographie 2026 |
 | `bassins_vie` | Bassins de vie 2022 | Insee | géographie 2026 |
 | `bassins_vie_2019_2022` | Bassins de vie, fichier des années 2019 à 2022 | Insee | 2019-2022 |

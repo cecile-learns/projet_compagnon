@@ -59,6 +59,14 @@ SOURCES = {
         "nom": "dvf_plus_echantillon_100k.csv",
         "dossier": DATA_OUT,
     },
+    # Table de modélisation déjà construite (01_preparation puis 03_modelisation/feature_engineering.py) :
+    # raccourci pour un examinateur ; l'équipe la reconstruit avec le pipeline
+    "table_modelisation": {
+        "type": "fichier",
+        "id": "15w3jw5mqsMzK6fWvRnnNlBBN9ofVM40I",
+        "nom": "table_modelisation_bv.parquet",
+        "dossier": DATA_OUT,
+    },
     "filosofi": {
         "type": "dossier",
         "id": "1QVGH4D5z5WjQHPlYuNGehSm91W4DAPKS",
