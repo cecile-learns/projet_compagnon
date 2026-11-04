@@ -1,7 +1,7 @@
 """
 Feature engineering - une table par source, jointe à la cible au sous-bassin de vie
 ===================================================================================
-Auteurs      : Cécile, Théophile, Gabrielle (jointures aux sous-bassins)
+Auteurs      : Cécile, Théophile, Gabrielle (jointures aux sous-bassins) et Christian (superficie des arrondissements)
                & Christian (superficie des arrondissements)
 Date         : 29/10/2026, mis à jour le 04/11/2026
 Description  : délinquance, LOVAC, équipements (BPE 2025), densité de population,
