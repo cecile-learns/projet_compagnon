@@ -1,7 +1,7 @@
 """
 Feature engineering - une table par source, jointe à la cible au sous-bassin de vie
 ===================================================================================
-Auteurs      : Cécile, Théophile, Gabrielle (jointures aux sous-bassins) et Christian (superficie des arrondissements)
+Auteurs      : Cécile, Théophile, Gabrielle (jointures aux sous-bassins)
                & Christian (superficie des arrondissements)
 Date         : 29/10/2026, mis à jour le 04/11/2026
 Description  : délinquance, LOVAC, équipements (BPE 2025), densité de population,
@@ -575,11 +575,13 @@ print("Bassins de vie :", table_longue["BV2022"].nunique(),
 #     annee dans l'index ET en colonne (commun.decouper fait table["annee"]).
 #     Colonnes retirées (liste écrite) : les 4 millésimes, annee_rp_menages (année du recensement utilisé),
 #     annee_faits et annee_ventes (= annee - 1),
-#     et une variable par couple redondant (audit de la table : |rho| de 0,78 à 0,88 avec la variable gardée)
+#     une variable par couple redondant (audit de la table, version 1 : |rho| de 0,78 à 0,88 avec la variable gardée)
+#     et les deux tailles des ménages (audit, version 2 : |rho| de 0,92 à 0,99 avec la part de personnes seules, gardée)
 NIVEAUX_INDEX = ["annee", "sous_bassin_de_vie", "type_bien"]
 COLONNES_A_RETIRER = ["millesime_lovac", "millesime_bpe", "millesime_rp", "millesime_filosofi",
                       "annee_rp_menages", "annee_faits", "annee_ventes",
-                      "part_suroccupes", "part_parking", "taux3_destructions"]   # redondantes (audit de la table)
+                      "part_suroccupes", "part_parking", "taux3_destructions",   # redondantes (audit, version 1)
+                      "taille_menage", "taille_moyenne_menage"]                  # redondantes (audit, version 2)
  
 absentes = sorted(set(COLONNES_A_RETIRER) - set(table_longue.columns))
 assert not absentes, f"Colonnes à retirer introuvables : {absentes}"
