@@ -448,6 +448,106 @@ print("-> Exporté : fe_cible_dvf_sbv.parquet", final_dvf.shape)
 
 
 # ==============================================================================
+# SECTION 6 BIS : EMPLOI SALARIÉ PRIVÉ (Urssaf, commune x activité x année -> sous-bassin x année)
+# ==============================================================================
+print("--- [6 bis] EMPLOI ---")
+
+df_emploi = pd.read_parquet(DATA_RAW / "etablissements_effectifs_commune.parquet")
+ANNEES_EMPLOI = sorted(int(c[-4:]) for c in df_emploi.columns if c.startswith("Effectifs salariés"))
+print(df_emploi.shape, "| années", ANNEES_EMPLOI[0], "à", ANNEES_EMPLOI[-1])
+
+# 6b.1 Code commune sur 5 caractères : zéro initial perdu pour une partie des lignes des départements
+#      01 à 09 (audit, 5.2 : 574 communes écrites des deux façons)
+df_emploi["code_commune"] = df_emploi["Code commune"].astype(str).str.zfill(5)
+assert not df_emploi.duplicated(["code_commune", "Code APE"]).any(), "Doublons commune x activité après correction du code"
+
+# 6b.2 Cases vides (audit, 5.1) : sans établissement -> 0 salarié (l'activité n'existait pas cette année-là) ;
+#      avec établissement -> secret statistique, laissé vide
+salaries = pd.DataFrame({a: df_emploi[f"Effectifs salariés {a}"] for a in ANNEES_EMPLOI})
+etablissements = pd.DataFrame({a: df_emploi[f"Nombre d'établissements {a}"] for a in ANNEES_EMPLOI})
+salaries = salaries.mask(salaries.isna() & ~(etablissements > 0), 0.0)
+secret = salaries.isna()
+active = secret | (salaries > 0)              # cellules avec au moins un établissement
+print("Cellules sous secret, toutes années :", int(secret.to_numpy().sum()))
+
+# 6b.3 Rattachement de chaque cellule commune x activité à son sous-bassin (CODGEO_INI)
+lien_emploi = liaison[["CODGEO_INI", "sous_bassin_de_vie"]].drop_duplicates()
+assert not lien_emploi["CODGEO_INI"].duplicated().any(), "Un code commune rattaché à deux sous-bassins"
+sbv_cellule = df_emploi["code_commune"].map(lien_emploi.set_index("CODGEO_INI")["sous_bassin_de_vie"])
+rattachee = sbv_cellule.notna()
+part_non_rattachee = salaries[~rattachee].sum().sum() / salaries.sum().sum()
+print(f"Salariés non rattachés à un sous-bassin : {part_non_rattachee:.2%}",
+      f"({df_emploi.loc[~rattachee, 'code_commune'].nunique()} codes)")
+assert part_non_rattachee < 0.01, "Plus de 1 % des salariés sans sous-bassin : vérifier les codes commune"
+
+# 6b.4 Somme au sous-bassin x année (le secret compte pour 0 dans le niveau : un établissement, négligeable)
+#      et part des cellules actives sous secret (contrôle qualité, hors modèle)
+groupe = sbv_cellule[rattachee]
+sal_sbv = salaries[rattachee].groupby(groupe).sum()
+part_secret = secret[rattachee].groupby(groupe).sum() / active[rattachee].groupby(groupe).sum().clip(lower=1) * 100
+
+# 6b.5 Évolution sur un an, à champ constant : seules les cellules connues les deux années comptent.
+#      Les absences valent 0 : on n'écarte que le secret, jamais une ouverture ou une fermeture
+cst, cst_prec = {}, {}
+for a in ANNEES_EMPLOI[1:]:
+    connues = rattachee & salaries[a].notna() & salaries[a - 1].notna()
+    cst[a] = salaries.loc[connues, a].groupby(sbv_cellule[connues]).sum()
+    cst_prec[a] = salaries.loc[connues, a - 1].groupby(sbv_cellule[connues]).sum()
+cst, cst_prec = pd.DataFrame(cst), pd.DataFrame(cst_prec)
+evolution = (cst / cst_prec.where(cst_prec > 0) - 1) * 100
+evolution = evolution.mask((cst == 0) & (cst_prec == 0), 0.0)   # aucun salarié les deux années : pas d'évolution
+
+# Sous-bassins de la cible sans aucun employeur privé : 0 salarié, pas d'évolution, pas de secret
+sbv_cible = pd.Index(cible["sous_bassin_de_vie"].unique(), name="sous_bassin_de_vie")
+print("Sous-bassins de la cible sans employeur privé :", len(sbv_cible.difference(sal_sbv.index)))
+sans_employeur = ~sbv_cible.isin(sal_sbv.index)
+sal_sbv = sal_sbv.reindex(sbv_cible, fill_value=0.0)
+part_secret = part_secret.reindex(sbv_cible, fill_value=0.0)
+evolution = evolution.reindex(sbv_cible)
+evolution.loc[sans_employeur] = 0.0
+
+# 6b.6 Niveau rapporté au parc de logements du recensement 2022 (même dénominateur que log_nb_logements)
+p22_log_emploi = pd.read_parquet(DATA_OUT / "logement_commune_2022.parquet", columns=["code_commune", "P22_LOG"])
+com_parc = pd.merge(liaison, p22_log_emploi, left_on="CODGEO_INI", right_on="code_commune")
+parc_sbv = com_parc.groupby("sous_bassin_de_vie")["P22_LOG"].sum()
+
+
+def en_long(t, nom):
+    """Sous-bassin en lignes x millésime en colonnes -> une ligne par sous-bassin x millésime."""
+    return (t.rename_axis("sous_bassin_de_vie").rename_axis(columns=None).reset_index()
+            .melt(id_vars="sous_bassin_de_vie", var_name="annee_emploi", value_name=nom))
+
+
+long_emploi = (en_long(sal_sbv, "salaries")
+               .merge(en_long(evolution, "evol_emploi_n2_n1"), on=["sous_bassin_de_vie", "annee_emploi"], how="left")
+               .merge(en_long(part_secret, "part_emploi_secret"), on=["sous_bassin_de_vie", "annee_emploi"], how="left"))
+long_emploi["annee_emploi"] = long_emploi["annee_emploi"].astype(int)
+long_emploi["emploi_par_logement"] = (long_emploi["salaries"]
+                                      / long_emploi["sous_bassin_de_vie"].map(parc_sbv.where(parc_sbv > 0)))
+
+# 6b.7 Décalage : salariés au 31/12 de N-1 -> prix de N (convention « connu en N-1 ») ;
+#      le 31/12/N-1 n'est publié qu'en mai de N : variante prudente (N-2) exportée à part, testée dans H3c
+DECALAGE_EMPLOI = 1
+VARIABLES_EMPLOI = ["emploi_par_logement", "evol_emploi_n2_n1", "part_emploi_secret"]
+
+
+def emploi_decale(decalage):
+    t = long_emploi.assign(annee=long_emploi["annee_emploi"] + decalage)
+    return t[["sous_bassin_de_vie", "annee", "annee_emploi"] + VARIABLES_EMPLOI]
+
+
+# Une table par variante de calendrier, sous-bassin x année de prix (lues par le notebook H3c)
+for d in (1, 2):
+    emploi_decale(d).to_parquet(DATA_OUT / f"fe_emploi_decalage{d}_sbv.parquet", index=False)
+    print(f"-> Exporté : fe_emploi_decalage{d}_sbv.parquet")
+
+# 6b.8 Jointure à la cible (sous-bassin x année) et export
+final_emploi = joindre_cible(emploi_decale(DECALAGE_EMPLOI), ["sous_bassin_de_vie", "annee"], "fe_cible_emploi_sbv.parquet")
+print("Cases vides par année de prix (%) :")
+print(final_emploi.groupby("annee")[VARIABLES_EMPLOI].apply(lambda g: g.isna().mean() * 100).round(2).to_string())
+print(final_emploi[VARIABLES_EMPLOI].describe().round(2).to_string())
+
+# ==============================================================================
 # SECTION 7 : FUSION DES HUIT TABLES (une ligne par sous-bassin x année, comme la cible)
 # ==============================================================================
 print("--- [7/8] FUSION DES SOURCES ---")
