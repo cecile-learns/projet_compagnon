@@ -860,10 +860,10 @@ print("Bloc 11 - mois :", len(taux_mois),
 # =============================================================================
 # BLOC 12 - ÉQUIPEMENTS PAR COMMUNE (BPE 2025)
 # =============================================================================
-# Source : BPE 2025, une ligne = un équipement (audit dans l'EDA complémentaire).
+# Source : BPE 2025, une ligne = un équipement (audit : 1_audits_sources, partie 8).
 # Six domaines : services, commerces, santé, transports, sports, tourisme
 # (enseignement exclu). Seuls les types présents dans la BPE en évolution sont
-# comptés : nombres comparables à ceux de l'EDA complémentaire (97,4 % des bassins
+# comptés : nombres comparables à ceux de la BPE en évolution (97,4 % des bassins
 # à moins de 1 % d'écart). Une ligne = une commune (géographie 2026, arrondissements
 # séparés). S'additionne à n'importe quelle maille ; commune absente = 0 équipement.
 

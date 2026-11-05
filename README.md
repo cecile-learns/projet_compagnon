@@ -37,10 +37,9 @@ projet_compagnon/
 │   ├── preparation.py              ← version courte, commentée
 │   └── preparation.ipynb           ← même code, avec les explications
 ├── 02_audit_eda/
-│   ├── audits.ipynb                ← audit de chaque source
-│   ├── eda.ipynb                   ← analyse exploratoire : cible, relations, synthèse
-│   ├── audits_eda.py               ← version script des deux notebooks
-│   └── audit_complementaire.ipynb  ← audits et EDA faits après le premier rapport
+│   ├── 1_audits_sources.ipynb               ← audit de chaque source brute
+│   ├── 1_eda_sources.ipynb                  ← analyse exploratoire des sources : cible, relations, synthèse
+│   └── 2_audit_eda_table_modelisation.ipynb ← audit et EDA de la table de modélisation, historique des passages
 └── 03_modelisation/
     ├── feature_engineering.py      ← table de modélisation (version de référence)
     ├── feature_engineering.ipynb   ← même code, avec les constats et justifications
@@ -78,7 +77,7 @@ Un fichier déjà téléchargé n'est pas retéléchargé. Si un téléchargemen
 - **Rapide** : `python 00_telechargement/telechargement.py dvf_residentiel` télécharge DVF+ déjà filtré (un seul fichier, 1,4 Go). Le filtrage du bloc 2 est alors sauté.
 - **Complet** : `python 00_telechargement/telechargement.py dvf` télécharge DVF+ brut (97 fichiers départementaux, plusieurs Go), filtré ensuite par le bloc 2.
 
-Le même principe vaut pour l'échantillon d'audit de DVF+ (`02_audit_eda/audits.ipynb`) : `python 00_telechargement/telechargement.py dvf_audit` le télécharge directement, sinon il est tiré à partir de DVF+ brut.
+Le même principe vaut pour l'échantillon d'audit de DVF+ (`02_audit_eda/1_audits_sources.ipynb`) : `python 00_telechargement/telechargement.py dvf_audit` le télécharge directement, sinon il est tiré à partir de DVF+ brut.
 
 ### 2. Préparer les données
 
@@ -90,15 +89,11 @@ ou exécuter `01_preparation/preparation.ipynb`, qui contient le même code avec
 
 ### 3. Audits et analyse exploratoire
 
-```bash
-python 02_audit_eda/audits_eda.py           # audits puis EDA
-python 02_audit_eda/audits_eda.py audits    # audits seulement
-python 02_audit_eda/audits_eda.py eda       # EDA seulement
-```
+Les audits et l'analyse exploratoire sont des notebooks, sans version script : ils contiennent le code, les résultats et leurs interprétations.
 
-ou exécuter `02_audit_eda/audits.ipynb` et `02_audit_eda/eda.ipynb`, qui contiennent les interprétations. Le script affiche les tableaux dans la console et enregistre les graphiques dans `02_audit_eda/figures/`. Les cartes de l'EDA ont besoin d'un accès à internet (contours des départements et des communes).
-
-`02_audit_eda/audit_complementaire.ipynb` regroupe les audits et l'EDA faits après le premier rapport (nouvelles sources, maille du bassin de vie).
+- `02_audit_eda/1_audits_sources.ipynb` : audit de chaque source telle qu'elle est livrée (origine, structure, variables, qualité). Les audits faits après le premier rapport y sont rangés dans la partie de leur source, avec leur date.
+- `02_audit_eda/1_eda_sources.ipynb` : la cible, les relations à l'intérieur de chaque source, les relations avec la cible, et la synthèse. Les cartes ont besoin d'un accès à internet (contours des départements et des communes).
+- `02_audit_eda/2_audit_eda_table_modelisation.ipynb` : audit et EDA de la table de modélisation, à lancer après l'étape 4. Il se relance à chaque changement de la table ; sa synthèse garde, pour chaque passage, la date et les enseignements tirés.
 
 ### 4. Feature engineering et table de modélisation
 
@@ -155,6 +150,8 @@ python 03_modelisation/test.py
 | `bpe` | Base permanente des équipements 2025 | Insee | 2025 |
 | `bpe_evolution` | Base permanente des équipements en évolution (nombre d'équipements par type et par territoire, dont le bassin de vie) | Insee | 2015, 2020, 2025 |
 | `taux` | Taux des crédits immobiliers aux particuliers | Banque de France | 1998-2026 |
+| `emploi` | Établissements employeurs et salariés du secteur privé, par commune et par activité | Urssaf | 2006-2025 |
+| `logement_millesimes` | Logement (recensement), bases IRIS des millésimes antérieurs | Insee | 2016-2021, 2023 |
 | `annonces_ventes` | Annonces de vente du Haut-Rhin (axe 2) | échantillon fourni | 2019-2023 |
 | `annonces_locations` | Annonces de location du Haut-Rhin (axe 2) | échantillon fourni | — |
 
