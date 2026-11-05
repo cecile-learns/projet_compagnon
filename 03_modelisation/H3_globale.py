@@ -525,6 +525,99 @@ print({t: f"{int((coef[t] != 0).sum())} variables sur {len(coef)}" for t in coef
 coef.loc[(coef != 0).any(axis=1)].sort_values("maison", key=abs, ascending=False).round(4)
 
 
+# ### 6.5 Contributions de chaque variable (équivalent SHAP) pour le modèle retenu pour le T1
+# Modèle étudié : **Elastic Net – modèle complet**, année jugée 2024, par type de bien (choix fixé avant les résultats : le plus simple parmi des régularisées à quelques €/m² les unes des autres ; le Ridge sert de contrôle en 6.6).
+# 
+# Pour un modèle linéaire, la valeur SHAP d'une variable est exactement **coefficient × (valeur centrée-réduite)** : on la calcule sans la bibliothèque `shap`, avec le même résultat. La cible est en log, une contribution de 0,05 se lit « environ +5 % sur le prix ». On donne la contribution absolue moyenne de chaque variable sur l'année jugée (son importance).
+
+# In[22]:
+
+
+MODELE_T1 = ELASTIC          # Elastic Net – modèle complet (choix fixé avant les résultats)
+TYPES_T1 = ["appartement", "maison"]
+
+def contributions(nom, annee, type_bien):
+    """Contributions linéaires (équivalent SHAP, en log du prix) de chaque variable sur l'année jugée."""
+    m, X_ev, _ = ajustes[(nom, annee, type_bien)]
+    est = m.best_estimator_.regressor_ if hasattr(m, "best_estimator_") else m.regressor_
+    Z = est.named_steps["echelle"].transform(X_ev)            # variables transformées, centrées-réduites
+    coef = est.named_steps["modele"].coef_
+    contrib = pd.DataFrame(Z * coef, index=X_ev.index, columns=X_ev.columns)
+    # Contrôle : intercept + somme des contributions = prévision en log
+    assert np.allclose(est.named_steps["modele"].intercept_ + contrib.sum(axis=1), est.predict(X_ev))
+    return contrib
+
+tab = {}
+for tb in TYPES_T1:
+    c = contributions(MODELE_T1, 2024, tb)
+    tab[tb] = c.abs().mean() * 100
+shap_tab = pd.DataFrame(tab).sort_values("maison", ascending=False).rename_axis("importance : contribution absolue moyenne (%)")
+shap_tab.round(2)
+
+
+# **Lecture.** `prix_n1` porte presque toute la prévision : sa contribution absolue moyenne est d'environ 40 % pour les appartements et 35 % pour les maisons, contre 2 % au plus pour chaque autre variable (résidences secondaires, densité, vacance en tête ; quatre variables sont mises à zéro pour les appartements : part_sans_voiture, part_apparts, log_nb_logements, anciennete_moyenne). Autrement dit, le modèle prévoit surtout *l'écart de niveau entre les territoires*, déjà contenu dans le prix N-1, et les variables du territoire n'y changent presque rien. Ces contributions décrivent le modèle sur une année et un type de bien, sans test.
+
+# ### 6.6 Diagnostic T1 : part commune et part propre de l'erreur
+# **Question :** l'erreur de 2024 vient-elle d'un décalage **commun à tous les territoires** (le « quand » : le marché a changé de phase) ou de l'erreur **propre à chaque territoire** (le « où ») ?
+# 
+# **Calcul**, par type de bien et par année jugée :
+# - erreur d'un territoire = prévision − prix réel (positive : surestimation) ;
+# - **part commune** = erreur moyenne de tous les territoires ; **part propre** = erreur du territoire − part commune ;
+# - on retire la part commune à la prévision et on compare à la naïve avec `evaluer` et `tester`, de deux façons : contre la **naïve telle quelle** (comme demandé par la feuille de route), et contre la **naïve elle aussi privée de sa part commune** (comparaison à égalité : la naïve a aussi une part commune, la lui laisser avantagerait le modèle).
+# 
+# **Limite à retenir :** la part commune utilise l'erreur réelle de l'année jugée. C'est un outil de diagnostic, pas un modèle : on ne peut pas la connaître avant l'année. Le Ridge sert de contrôle, pour vérifier que la lecture ne dépend pas du modèle choisi.
+
+# In[23]:
+
+
+resultats_t1, tests_t1, parts = [], [], []
+for nom_modele, etiquette in [(ELASTIC, "Elastic Net"), (RIDGE, "Ridge")]:
+    for annee, (app, ev) in FENETRES.items():
+        prev = previsions[(nom_modele, annee)]
+        type_bien = ev.index.get_level_values("type_bien")
+        err = prev - ev[CIBLE]                                              # signée : positive = surestimation
+        part_commune = err.groupby(type_bien).transform("mean")             # erreur moyenne de tous les territoires
+        prev_sans = prev - part_commune                                     # prévision sans la part commune
+        err_naive = ev["prix_n1"] - ev[CIBLE]
+        part_commune_naive = err_naive.groupby(type_bien).transform("mean")
+        ev_naive_sans = ev.copy()
+        ev_naive_sans["prix_n1"] = ev["prix_n1"] - part_commune_naive      # naïve sans sa part commune
+        nom1 = f"{HYPOTHESE} – T1 – {etiquette} sans part commune, contre naïve"
+        nom2 = f"{HYPOTHESE} – T1 – {etiquette} sans part commune, contre naïve sans part commune"
+        evaluer(nom1, ev, prev_sans, resultats_t1); tester(nom1, ev, prev_sans, tests_t1)
+        evaluer(nom2, ev_naive_sans, prev_sans, resultats_t1); tester(nom2, ev_naive_sans, prev_sans, tests_t1)
+        for tb in TYPES_T1:
+            sel = type_bien == tb
+            parts.append({"modèle": etiquette, "année jugée": annee, "type de bien": tb,
+                          "part commune du modèle (€/m²)": part_commune[sel].iloc[0],
+                          "part commune de la naïve (€/m²)": part_commune_naive[sel].iloc[0],
+                          "MAE modèle (€/m²)": err[sel].abs().mean(),
+                          "MAE modèle sans part commune (€/m²)": (err - part_commune)[sel].abs().mean(),
+                          "MAE naïve (€/m²)": err_naive[sel].abs().mean(),
+                          "MAE naïve sans part commune (€/m²)": (err_naive - part_commune_naive)[sel].abs().mean()})
+parts = pd.DataFrame(parts).set_index(["modèle", "année jugée", "type de bien"])
+parts.round(1)
+
+
+# In[24]:
+
+
+rt, tt = pd.DataFrame(resultats_t1), pd.DataFrame(tests_t1)
+cles = ["modèle", "type de bien", "année jugée"]
+t1 = rt[cles + ["gain sur la naïve (%)"]].merge(tt[cles + ["IC 95 % bas (€/m²)", "IC 95 % haut (€/m²)", "rang-bisériale"]], on=cles)
+t1["comparaison"] = t1["modèle"].str.contains("contre naïve sans part commune").map({True: "naïve sans part commune (égalité)", False: "naïve telle quelle"})
+t1["modèle"] = t1["modèle"].str.extract(r"T1 – (Elastic Net|Ridge)")
+t1["règle 1.5 remplie"] = (t1["IC 95 % haut (€/m²)"] < 0) & (t1["rang-bisériale"] < 0) & (t1["gain sur la naïve (%)"] >= SEUIL_GAIN)
+t1.sort_values(["année jugée", "type de bien", "modèle", "comparaison"]).round(2).reset_index(drop=True)
+
+
+# **Lecture du T1 (2024, Elastic Net ; le Ridge donne la même lecture).**
+# - **La part commune pèse un quart de l'erreur.** Le modèle surestime de **+150 €/m²** en moyenne pour les appartements et de **+174 €/m²** pour les maisons ; la naïve, de +41 et +71 €/m². En retirant la part commune, la MAE du modèle passe de 197 à **148 €/m²** (appartements, −25 %) et de 197 à **141 €/m²** (maisons, −29 %).
+# - **Mais même sans part commune, le modèle ne bat pas la naïve en 2024.** Appartements : 148 €/m² contre 148 pour la naïve (égalité : gain de −0,03 %, IC contenant 0) ; maisons : 141 contre 129 (gain de −8,8 %, IC entièrement au-dessus de 0 : le modèle fait vraiment moins bien). À égalité, en privant aussi la naïve de sa part commune, c'est encore moins favorable (−2,0 % et −18,9 %).
+# - **2023 est plus nuancé.** Pour les appartements, le modèle sans part commune bat la naïve telle quelle (+9,0 %, IC entièrement sous 0 ; Ridge +5,6 %), mais pas à égalité (+3,1 %, IC contenant 0). Pour les maisons, non (−5,5 %). La règle 1.5 est donc remplie une année sur deux, pour les appartements seulement : pas retenu.
+# - **Lecture selon la grille de la feuille de route :** « même sans la part commune, il ne bat pas la naïve » → **le « où » n'apporte rien de stable au-delà du prix N-1** ; le niveau 2 est utile et le gain attendu vient du « quand » (phase du marché). Cette lecture est à confirmer collectivement ; elle repose sur deux années jugées, toutes deux pendant le retournement.
+
+# 
 # ## 7. Conclusion
 # **Questions :** (1.0) modèle commun ou séparé ? Une fois les blocs retenus réunis : (1.2) quel gain reste-t-il au-delà du prix N-1 et quelles variables survivent ? (1.3) l'effet propre du sous-bassin apporte-t-il quelque chose ? (1.4) un arbre, une forêt ou un boosting font-ils mieux ?
 # 
@@ -537,7 +630,7 @@ coef.loc[(coef != 0).any(axis=1)].sort_values("maison", key=abs, ascending=False
 # - **Où vient le gain :** pour les maisons, des variables du bloc (le Lasso sur le prix N-1 seul ne gagne rien) ; pour les appartements, en grande partie de la régularisation du prix N-1 (Lasso sur le prix N-1 seul : 6 à 9 %), ce qui confirme la remarque de H3a.
 # - **Équipements (piste H3a) :** un petit gain de plus pour les maisons (8 à 10 % contre 7 à 8 %), rien pour les appartements.
 # 
-# **3. Variables (1.2).** `prix_n1` domine très largement (section 6.2). Le Lasso garde 8 variables sur 12 pour les appartements et les 12 pour les maisons (section 6.4). Après `prix_n1`, les plus fortes sont la densité, la part de résidences secondaires et la vacance. En 2024, seules `prix_n1` et la part de résidences secondaires aident (importance par permutation) : les autres ont un effet appris pendant la hausse qui dessert le modèle pendant le retournement.
+# **3. Variables (1.2).** `prix_n1` domine très largement (sections 6.2 et 6.5 : environ 35 à 40 % de contribution moyenne contre 2 % au plus pour chaque autre variable). Le Lasso garde 8 variables sur 12 pour les appartements et les 12 pour les maisons (section 6.4). Après `prix_n1`, les plus fortes sont la densité, la part de résidences secondaires et la vacance. En 2024, seules `prix_n1` et la part de résidences secondaires aident (importance par permutation) : les autres ont un effet appris pendant la hausse qui dessert le modèle pendant le retournement.
 # 
 # **4. Hiérarchique (1.3).** L'ICC est de 0 à 0,0008 : l'effet propre du sous-bassin n'apporte rien au-delà du prix N-1 et le modèle se comporte comme la régression simple (même MAE à 1-2 €/m² près). Un modèle (maisons 2023) n'a pas convergé, ce qui est attendu quand la variance de groupe est quasi nulle.
 # 
@@ -545,6 +638,11 @@ coef.loc[(coef != 0).any(axis=1)].sort_values("maison", key=abs, ascending=False
 # 
 # **6. Qualité des données :** l'erreur n'est pas concentrée dans les territoires aux données estimées ou complétées ; rapportée au prix, elle est de 8 à 10 % dans tous les groupes (section 6.3).
 # 
-# **Meilleur modèle du niveau 1 :** les régularisées complètes sont à quelques €/m² les unes des autres (appartements 2024 : 195 à 203 ; maisons 2024 : 193 à 197, contre 148 et 129 pour la naïve). À désigner avant le diagnostic T1 ; le plus simple et stable est le Ridge ou l'Elastic Net sur le modèle complet.
+# **Modèle retenu pour le diagnostic T1 : Elastic Net – modèle complet** (règle fixée avant les résultats : le plus simple parmi des régularisées à 2-4 % les unes des autres ; il est le meilleur ou à égalité sur les deux types de bien et les deux années ; le Ridge sert de contrôle). Appartements 2024 : 197 €/m² contre 148 pour la naïve ; maisons 2024 : 197 contre 129.
+# 
+# **7. Diagnostic T1 (section 6.6).** Le modèle surestime de +150 €/m² (appartements) et +174 €/m² (maisons) en 2024, un décalage commun à tous les territoires qui pèse un quart de l'erreur (MAE 197 → 148 et 141 €/m² sans part commune). Même sans elle, le modèle ne bat pas la naïve en 2024 (appartements : égalité ; maisons : −8,8 %). **Le « où » n'apporte rien de stable au-delà du prix N-1 ; le gain attendu est dans le « quand ».** À lire collectivement avec les autres chiffres.
+# 
+# **À décider avec l'équipe avant d'ouvrir 2025 :** aucun modèle n'est retenu contre la naïve, donc la règle « test 2025 pour le modèle retenu » ne désigne personne. Soit le meilleur modèle du niveau 1 (Elastic Net complet) sert de candidat, soit la naïve reste la référence du niveau 1 et le test confirme qu'aucun modèle ne la bat. À noter avant l'ouverture du test.
 # 
 # **Limites :** deux années jugées, toutes deux pendant le retournement ; plusieurs variantes comparées sur les mêmes années (celle qui ressort a pu en profiter) ; l'importance des variables porte sur une année et un type de bien ; l'emploi n'est pas inclus ; plusieurs `alpha` tombent sur le bord de la grille (maisons : 1e-4 et 1e-5, proche d'une régression non pénalisée).
+# 
