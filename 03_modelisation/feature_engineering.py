@@ -1,12 +1,13 @@
 """
 Feature engineering - une table par source, jointe à la cible au sous-bassin de vie
 ===================================================================================
-Auteurs      : Cécile, Théophile, Gabrielle (jointures aux sous-bassins)
+Auteurs      : Cécile, Théophile, Gabrielle (jointures aux sous-bassins & emploi salarié privé)
                & Christian (superficie des arrondissements)
 Date         : 29/10/2026, mis à jour le 04/11/2026
 Description  : délinquance, LOVAC, équipements (BPE 2025), densité de population,
                parc de logements (recensement 2022), Filosofi, ménages (recensements
-               2019-2022) et DVF+ (volume de ventes).
+               2019-2022), DVF+ (volume de ventes) et emploi salarié privé (Urssaf,
+               exporté à part, pas encore branché à la fusion).
                Pour chaque source : préparation à la commune, rattachement aux
                sous-bassins (liaison_bv_scindes), agrégation, jointure à gauche
                sur la cible (cible_sbv_annee), export fe_cible_<source>_sbv.parquet.
@@ -27,7 +28,7 @@ import pandas as pd
 
 # config.py se trouve à la racine du projet, dossier parent de ce fichier
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config import DATA_OUT
+from config import DATA_RAW, DATA_OUT
 
 # Tables de référence communes à toutes les sources
 cible = pd.read_parquet(DATA_OUT / "cible_sbv_annee.parquet")
@@ -467,7 +468,7 @@ salaries = pd.DataFrame({a: df_emploi[f"Effectifs salariés {a}"] for a in ANNEE
 etablissements = pd.DataFrame({a: df_emploi[f"Nombre d'établissements {a}"] for a in ANNEES_EMPLOI})
 salaries = salaries.mask(salaries.isna() & ~(etablissements > 0), 0.0)
 secret = salaries.isna()
-active = secret | (salaries > 0)              # cellules avec au moins un établissement
+active = etablissements > 0                   # cellules avec au moins un établissement
 print("Cellules sous secret, toutes années :", int(secret.to_numpy().sum()))
 
 # 6b.3 Rattachement de chaque cellule commune x activité à son sous-bassin (CODGEO_INI)

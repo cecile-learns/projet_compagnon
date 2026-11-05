@@ -132,6 +132,13 @@ SOURCES = {
         "id": "1YhJRedRswwSfTrhTJlR1abCjvHj2IonP",
         "nom": "Taux d'intérêt annuel des crédits immobiliers.csv",
     },
+    # Emploi salarié privé (Urssaf) : établissements et salariés au 31/12, par commune x activité (APE),
+    # 2006 à 2025 ; lu directement par 03_modelisation/feature_engineering.py (section 6 bis)
+    "emploi": {
+        "type": "fichier",
+        "id": "1BaFmodH9dCgrzKDm2K1gh9pq2uCClHyf",
+        "nom": "etablissements_effectifs_commune.parquet",
+    },
     # Annonces immobilières du Haut-Rhin (axe 2)
     "annonces_ventes": {
         "type": "fichier",
