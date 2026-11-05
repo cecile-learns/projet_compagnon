@@ -1,14 +1,16 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# # Modélisation – H3 globale, étape 1.2 : Ridge, Lasso, Elastic Net sur le modèle complet
+# # Modélisation – H3 globale : naïve (1.0) et Ridge, Lasso, Elastic Net sur le modèle complet (1.2)
 # **Contributeurs :** Christian · **Date :** 05/11/2026
 # 
 # Notebook construit à partir du template commun de l'équipe. Il passe par `commun.py` pour tout ce qui doit être identique d'une hypothèse à l'autre : la table, le masque des lignes, les fenêtres, la naïve, `evaluer` et `tester`.
 # 
-# **Question :** une fois les blocs retenus réunis (modèle complet), que reste-t-il comme gain au-delà du prix N-1, et quelles variables survivent ?
+# **Questions :** (1.0) faut-il un modèle commun ou deux modèles séparés pour les maisons et les appartements ? (1.2) une fois les blocs retenus réunis (modèle complet), que reste-t-il comme gain au-delà du prix N-1, et quelles variables survivent ?
 # 
 # **Statut : PROVISOIRE.** Conclusions intégrées : H3b (Cécile) et H3c (Gabrielle, emploi retenu pour les maisons avec le gradient boosting seulement : hors de ce notebook). **H3a (Théophyle) est absente** : son bloc est ajouté en variante, avec tous ses indicateurs, en attendant sa conclusion.
+# 
+# Les étapes 1.3 (modèle hiérarchique) et 1.4 (arbre, forêt, gradient boosting) s'ajoutent à ce notebook, pour que tous les modèles soient comparés dans les mêmes tableaux.
 
 # ## 0. Paramètres de l'hypothèse
 # Les variables sont rangées par bloc, dans l'ordre où elles entrent dans les modèles :
@@ -250,9 +252,43 @@ print(len(SANS_H3A), "variables sans H3a ;", len(AVEC_H3A), "avec H3a")
 REFERENCE = lancer("Régression linéaire – prix N-1 seul", LinearRegression(), REFERENCE_VARS, log=True)
 
 
-# ### 4.2 Modèle complet sans H3a : Ridge, Lasso, Elastic Net
+# ### 4.1 bis Étape 1.0 : modèle commun ou séparé pour maisons et appartements
+# La référence ci-dessus est **séparée** : un modèle par type de bien, comme tout le notebook. On la compare à une version **commune** : un seul modèle pour les deux types, avec un indicateur « maison » (`maison`, déjà dans la table). Même cible en log, mêmes lignes, mêmes fenêtres ; seule la séparation change. Le modèle commun entre dans les tableaux des sections 5 et 5.2.
 
 # In[8]:
+
+
+def lancer_commun(nom):
+    """Régression log(prix) ~ log(prix N-1) + maison, un seul modèle pour les deux types de bien."""
+    nom = f"{HYPOTHESE} – {nom}"
+    resultats[:] = [r for r in resultats if r["modèle"] != nom]
+    tests[:] = [t for t in tests if t["modèle"] != nom]
+    for annee, (app, ev) in FENETRES.items():
+        X_app = pd.DataFrame({"log_prix_n1": np.log(app["prix_n1"]), "maison": app["maison"]})
+        X_ev = pd.DataFrame({"log_prix_n1": np.log(ev["prix_n1"]), "maison": ev["maison"]})
+        m = LinearRegression().fit(X_app, np.log(app[CIBLE]))
+        prevision = pd.Series(np.exp(m.predict(X_ev)), index=ev.index)
+        previsions[(nom, annee)] = prevision
+        evaluer(nom, ev, prevision, resultats)
+        tester(nom, ev, prevision, tests)
+    return nom
+
+REFERENCE_COMMUNE = lancer_commun("Régression linéaire – prix N-1 seul, commune (indicateur maison)")
+
+# Commun contre séparé : écart de MAE (positif : le modèle commun est moins bon)
+r = pd.DataFrame(resultats)
+mae = r[r["modèle"].isin([REFERENCE, REFERENCE_COMMUNE])].pivot_table(
+    index=["année jugée", "type de bien"], columns="modèle", values="MAE (€/m²)")
+ecart = pd.DataFrame({"MAE séparée": mae[REFERENCE], "MAE commune": mae[REFERENCE_COMMUNE]})
+ecart["commune - séparée (€/m²)"] = ecart["MAE commune"] - ecart["MAE séparée"]
+ecart.round(2)
+
+
+# **Lecture (étape 1.0).** Le modèle commun fait un peu mieux pour les maisons (−5 à −6 €/m² de MAE) et un peu moins bien pour les appartements (+10 €/m²), les deux années. L'écart est de 3 à 5 % de l'erreur et va dans les deux sens : ni l'un ni l'autre ne s'impose. **Choix retenu pour la suite : modèles séparés** (un par type de bien et par fenêtre). Raisons : la séparation laisse à chaque type sa propre pente sur `prix_n1` et ses propres coefficients, c'est le fonctionnement du template d'équipe et des notebooks H3b et H3c, et le commun ne gagne que sur un type de bien. *Décision à confirmer par le propriétaire du profil (décision 1.6 : « décidé par Chauve-Souris sur la naïve »).*
+
+# ### 4.2 Modèle complet sans H3a : Ridge, Lasso, Elastic Net
+
+# In[9]:
 
 
 RIDGE = lancer("Ridge – sans H3a", Ridge(), SANS_H3A, log=True, grille=GRILLE_RIDGE)
@@ -263,7 +299,7 @@ ELASTIC = lancer("Elastic Net – sans H3a", ElasticNet(max_iter=50_000), SANS_H
 # ### 4.3 Modèle complet avec H3a (provisoire) : Ridge, Lasso, Elastic Net
 # Le Lasso ramène à zéro les coefficients des variables qui n'apportent rien : c'est lui qui dit quelles variables survivent (section 6.4). Les valeurs d'`alpha` sont petites : la cible est en log et les variables sont mises à l'échelle.
 
-# In[9]:
+# In[10]:
 
 
 RIDGE_H3A = lancer("Ridge – avec H3a", Ridge(), AVEC_H3A, log=True, grille=GRILLE_RIDGE)
@@ -274,7 +310,7 @@ ELASTIC_H3A = lancer("Elastic Net – avec H3a", ElasticNet(max_iter=50_000), AV
 # ### 4.4 Gradient boosting et modèle hiérarchique
 # Hors de ce notebook : ils sont faits aux étapes 1.4 (gabarit gradient boosting de Théophyle, avec l'emploi pour les maisons) et 1.3 (gabarit hiérarchique).
 
-# In[10]:
+# In[11]:
 
 
 # Réglage retenu par la validation (alpha, l1_ratio) pour chaque modèle : le meilleur réglage est-il collé au bord de la grille ?
@@ -304,14 +340,14 @@ reglages
 #    - **Rang-bisériale** (taille d'effet) : de −1 (le modèle fait mieux partout) à +1 (il fait moins bien partout) ; autour de 0, pas de différence nette.
 # 3. **`decision` : la règle de décision.** Une année est réussie si l'IC est entièrement sous 0, la rang-bisériale négative et le gain d'au moins 3 %. Un modèle est retenu s'il réussit la majorité des années jugées (ici, les deux).
 
-# In[11]:
+# In[12]:
 
 
 res = pd.DataFrame(resultats)
 res.round(2)
 
 
-# In[12]:
+# In[13]:
 
 
 tst = pd.DataFrame(tests)
@@ -320,7 +356,7 @@ tst.round(3)
 
 # ### 5.1 Règle de décision contre la naïve
 
-# In[13]:
+# In[14]:
 
 
 SEUIL_GAIN = 3      # % de gain sur la MAE de la comparaison, fixé avant les résultats
@@ -352,7 +388,7 @@ regle_decision(res, tst)
 # 
 # Lecture : un gain positif et un intervalle du bootstrap entièrement sous 0 veulent dire que le modèle fait vraiment mieux que la référence.
 
-# In[14]:
+# In[15]:
 
 
 resultats_ref, tests_ref = [], []
@@ -377,7 +413,7 @@ display(tst_ref[["modèle", "type de bien", "année jugée", "écart de MAE avec
 # #### Règle de décision contre la référence
 # Même règle que contre la naïve, avec le modèle « prix N-1 seul » à la place de la naïve.
 
-# In[15]:
+# In[16]:
 
 
 regle_decision(res_ref, tst_ref, comparaison="référence")
@@ -395,7 +431,7 @@ regle_decision(res_ref, tst_ref, comparaison="référence")
 # ### 6.1 Contexte : le marché s'est-il retourné ?
 # Les modèles apprennent sur les années de hausse 2020-2022, puis sont jugés sur 2023 et 2024. Pour lire leurs résultats, on mesure l'évolution du prix d'une année sur l'autre (prix / prix N-1 − 1), en moyenne et en médiane, par année et par type de bien, jusqu'à 2024. L'année 2025, réservée au test final, n'est pas regardée.
 
-# In[16]:
+# In[17]:
 
 
 jusqua_2024 = table[table["annee"] <= commun.ANNEE_VALIDATION]
@@ -409,7 +445,7 @@ retournement.unstack()
 # ### 6.2 Importance des variables
 # Importance par permutation, sur l'année jugée : on mélange au hasard les valeurs d'une variable entre les sous-bassins, 10 fois, et on mesure de combien l'erreur du modèle change (moyenne et écart-type). Une hausse : la variable était utile ; 0 : le modèle ne s'en sert pas ; une baisse : sur cette année, la variable dessert le modèle. Une variable compte si sa valeur dépasse nettement deux écarts-types. Choisir le modèle, l'année jugée et le type de bien.
 
-# In[17]:
+# In[18]:
 
 
 choix = (LASSO_H3A, 2024, "maison")        # modèle, année jugée, type de bien étudiés (à adapter)
@@ -424,7 +460,7 @@ pd.DataFrame({"hausse de la MAE (€/m²)": imp.importances_mean,
 # ### 6.3 Analyse des erreurs selon le contrôle qualité
 # L'erreur est-elle plus grande là où les données sont estimées ou complétées ? Pour chaque variable de contrôle qualité : groupe « part nulle », puis quartiles parmi les parts non nulles. Par groupe : erreur moyenne en €/m² et en % du prix (l'erreur en €/m² grandit avec le niveau des prix), et erreur moyenne signée (positive : le modèle surestime). Rho de Spearman entre la variable et l'erreur, en €/m² et en %. Même modèle qu'en 6.2.
 
-# In[18]:
+# In[19]:
 
 
 CONTROLE = ["part_indicateurs_estimes", "part_logements_taux_impute", "part_menages_couverts"]
@@ -452,7 +488,7 @@ for v in CONTROLE:
 # ### 6.4 Quelles variables survivent au Lasso ?
 # Coefficients du Lasso « avec H3a » (variables transformées et mises à l'échelle, cible en log), année jugée 2024, par type de bien. Un coefficient nul : la variable est écartée à l'alpha retenu. Le coefficient de `prix_n1` est le poids du prix de l'année précédente.
 
-# In[19]:
+# In[20]:
 
 
 def coefficients(nom, annee, type_bien):
@@ -468,6 +504,8 @@ coef.loc[(coef != 0).any(axis=1)].sort_values("maison", key=abs, ascending=False
 
 # ## 7. Conclusion
 # **Question :** une fois les blocs retenus réunis, que reste-t-il comme gain au-delà du prix N-1, et quelles variables survivent ?
+# 
+# **0. Modèle commun ou séparé (1.0) :** séparé (section 4.1 bis). Le commun gagne de 5 à 6 €/m² pour les maisons et perd de 10 €/m² pour les appartements : l'écart est faible et va dans les deux sens.
 # 
 # **1. Contre la naïve : aucun modèle n'est retenu.** 0 année réussie sur 2 pour tous les modèles régularisés (Ridge, Lasso, Elastic Net), avec ou sans H3a, appartements comme maisons. Le gain sur la naïve va de −1 % à −57 %. La cause est celle déjà vue en H3b et H3c : les modèles apprennent sur 2020-2022 (+5 à +10 % par an) et sont jugés sur 2023 (+1 à +3 %) puis 2024 (−1 à −2 %) ; ils prolongent la hausse et surestiment les prix. L'erreur signée est positive partout (surestimation de +110 à +340 €/m² selon les groupes, section 6.3) ; l'erreur en % du prix reste stable (8 à 10 %) d'un groupe de contrôle qualité à l'autre : la qualité des données n'explique pas l'erreur. Le modèle « prix N-1 seul » perd déjà : le problème ne vient pas des blocs.
 # 
