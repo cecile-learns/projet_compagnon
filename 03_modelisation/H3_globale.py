@@ -1,23 +1,21 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# # Modélisation – H3 globale : naïve (1.0) et Ridge, Lasso, Elastic Net sur le modèle complet (1.2)
+# # Modélisation – H3 globale : naïve (1.0), Ridge / Lasso / Elastic Net (1.2), hiérarchique (1.3), arbres et boosting (1.4)
 # **Contributeurs :** Christian · **Date :** 05/11/2026
 # 
 # Notebook construit à partir du template commun de l'équipe. Il passe par `commun.py` pour tout ce qui doit être identique d'une hypothèse à l'autre : la table, le masque des lignes, les fenêtres, la naïve, `evaluer` et `tester`.
 # 
-# **Questions :** (1.0) faut-il un modèle commun ou deux modèles séparés pour les maisons et les appartements ? (1.2) une fois les blocs retenus réunis (modèle complet), que reste-t-il comme gain au-delà du prix N-1, et quelles variables survivent ?
+# **Questions :** (1.0) faut-il un modèle commun ou deux modèles séparés pour les maisons et les appartements ? Une fois les blocs retenus réunis (modèle complet) : (1.2) que reste-t-il comme gain au-delà du prix N-1, et quelles variables survivent ? (1.3) l'effet propre à chaque sous-bassin apporte-t-il quelque chose ? (1.4) un arbre, une forêt ou un gradient boosting font-ils mieux ?
 # 
-# **Statut : PROVISOIRE.** Conclusions intégrées : H3b (Cécile) et H3c (Gabrielle, emploi retenu pour les maisons avec le gradient boosting seulement : hors de ce notebook). **H3a (Théophyle) est absente** : son bloc est ajouté en variante, avec tous ses indicateurs, en attendant sa conclusion.
-# 
-# Les étapes 1.3 (modèle hiérarchique) et 1.4 (arbre, forêt, gradient boosting) s'ajoutent à ce notebook, pour que tous les modèles soient comparés dans les mêmes tableaux.
+# **Conclusions des hypothèses intégrées :** H3a (Théophyle) : aucune variable d'attractivité retenue ; H3b (Cécile) : parc, vacance et densité retenus ; H3c (Gabrielle) : emploi retenu pour les maisons avec le gradient boosting seulement (à ajouter en 1.4, voir section 4.7).
 
 # ## 0. Paramètres de l'hypothèse
-# Les variables sont rangées par bloc, dans l'ordre où elles entrent dans les modèles :
-# - **H3b retenu** (conclusion de Cécile) : **parc** (9 indicateurs), **vacance** (LOVAC) et **densité**. Ce sont les blocs qui portent l'apport contre « prix N-1 seul ». Les **ménages** et les **revenus** sont écartés : les ménages font perdre l'année 2023 aux deux types de bien, les revenus ne réduisent pas l'erreur davantage que le parc.
-# - **H3a** (attractivité : équipements et délinquance) : conclusion non reçue. Tous les indicateurs sont inclus en variante « avec H3a », pour être retirés ou gardés quand elle arrive.
-# - **H3c** (emploi) : retenu pour les maisons avec le gradient boosting seulement. Il n'entre donc pas dans les modèles régularisés (il sera ajouté à l'étape 1.4).
-# - `nb_ventes_n1` n'appartient à aucun bloc : hors modèle (la feuille de route définit le modèle complet comme prix N-1 + blocs retenus).
+# Le **modèle complet** est : prix N-1 + les blocs retenus en H3a, H3b et H3c.
+# - **H3b retenu** (Cécile) : **parc** (9 indicateurs), **vacance** (LOVAC) et **densité**. Ménages et revenus sont écartés : les ménages font perdre l'année 2023 aux deux types de bien, les revenus ne réduisent pas l'erreur davantage que le parc.
+# - **H3a** (Théophyle) : **aucune variable retenue**. Deux pistes sont signalées, à tester sans les retenir d'office : les **équipements pour les maisons** (gain de 1,4 à 2,9 %, sous le seuil de 3 %) et la **régularisation sur le prix N-1**. La densité n'entre qu'une fois, dans H3b. Les équipements sont donc testés en **variante** (4.3), la délinquance n'est pas reprise (effet instable d'une année à l'autre).
+# - **H3c** (Gabrielle) : emploi retenu pour les maisons avec le gradient boosting seulement : il entre en 1.4, pas dans les modèles linéaires.
+# - `nb_ventes_n1` n'appartient à aucun bloc : hors modèle.
 # 
 # `LOG` et `LOG1P` : mêmes règles que le template. `prix_n1` passe en log avec la cible.
 
@@ -26,18 +24,16 @@
 
 HYPOTHESE = "H3"
 
-# --- H3b retenu (conclusion de Cécile) -------------------------------------------------------------
+# --- H3b retenu (conclusion de Cécile) : parc, vacance, densité ---
 PARC = ["taux_vacance", "part_rsec", "part_apparts", "log_nb_logements", "part_moins40m2",
         "part_avant1946", "part_2006_2019", "anciennete_moyenne", "part_sans_voiture"]
 VACANCE = ["taux_vacance_complete"]
 DENSITE = ["densite_population"]
-# --- H3a : conclusion non reçue (PROVISOIRE : tous les indicateurs, à restreindre) -----------------
+# --- H3a : rien de retenu ; les équipements sont testés en variante (piste de Théophyle) ---
 EQUIPEMENTS = ["taux_equip_commerces", "taux_equip_sante", "taux_equip_services", "taux_equip_sports",
                "taux_equip_tourisme", "taux_equip_transports"]
-DELINQUANCE = ["taux3_vols_sans_violence", "taux3_vols_vehicules", "taux3_vols_violents", "taux3_cambriolages",
-               "taux3_violences_intrafamiliales", "taux3_violences_sexuelles", "taux3_stupefiants"]
 
-VARIABLES_BLOC = PARC + VACANCE + DENSITE + EQUIPEMENTS + DELINQUANCE      # tous les blocs (constat rapide)
+VARIABLES_BLOC = PARC + VACANCE + DENSITE + EQUIPEMENTS      # tous les blocs testés (constat rapide, section 2)
 
 # Variables asymétriques de la table (audit complémentaire, version 2)
 LOG = ["nb_ventes_n1", "densite_population", "niveau_vie_median",
@@ -67,6 +63,8 @@ from copy import deepcopy
 from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.inspection import permutation_importance
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import DecisionTreeRegressor
 from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
@@ -75,6 +73,7 @@ from sklearn.preprocessing import StandardScaler
 import commun
 from commun import CIBLE, charger_table, fenetres, plis_temporels, evaluer, tester
 from gabarit_hierarchique import ModeleHierarchique
+from gabarit_boosting import BoostingEvolution, prevoir_boosting
 
 table = charger_table()
 FENETRES = fenetres(table)
@@ -131,20 +130,22 @@ pd.DataFrame(liens_evolution).pivot(index="variable", columns="type de bien", va
 # ## 3. Fonctions du notebook
 # Chaque modèle est lancé en une ligne : `lancer(nom, modèle, variables, log=..., grille=...)`.
 # - `nom` : le nom du modèle dans les tableaux (le préfixe de l'hypothèse est ajouté automatiquement) ;
-# - `modèle` : le modèle à utiliser (régression linéaire, Lasso, gradient boosting, modèle hiérarchique) ;
+# - `modèle` : le modèle à utiliser (régression linéaire, Lasso, gradient boosting `BoostingEvolution()`, modèle hiérarchique) ;
 # - `variables` : les colonnes de la table données au modèle ;
 # - `log=True` : la cible et les variables de `VARIABLES_LOG` passent en log, celles de `VARIABLES_LOG1P` en log(1 + x) ; à réserver aux modèles qui en ont besoin (régressions, Lasso, modèle hiérarchique), jamais aux arbres ;
 # - `grille` : les valeurs d'un réglage à tester (par exemple `alpha` pour le Lasso).
 # 
 # Ce que fait `lancer`, pour chacune des deux années jugées (2023, puis 2024) et pour chaque type de bien :
 # 1. elle prend les années d'apprentissage, avant l'année jugée ;
-# 2. elle met les variables à l'échelle et entraîne le modèle ; avec une grille, elle choisit d'abord le meilleur réglage, chaque année d'apprentissage servant tour à tour de validation (`plis_temporels` de `commun.py`) ;
+# 2. elle met les variables à l'échelle (sauf pour le gradient boosting et le modèle hiérarchique) et entraîne le modèle ; avec une grille, elle choisit d'abord le meilleur réglage, chaque année d'apprentissage servant tour à tour de validation (`plis_temporels` de `commun.py`) ;
 # 3. elle prévoit le prix de l'année jugée, remis en €/m² si le modèle a appris en log ;
 # 4. elle compare la prévision au prix réel et à la naïve (prix N = prix N-1) avec `evaluer` et `tester` de `commun.py`.
 # 
 # Elle affiche ensuite l'erreur du modèle (MAE, en €/m²), celle de la naïve, le gain sur la naïve (négatif : le modèle fait moins bien) et la part des sous-bassins où le modèle gagne. Elle garde les modèles entraînés (`ajustes`, pour la section 6) et leurs prévisions (`previsions`, pour la section 5.2). Relancer une cellule remplace les résultats du modèle au lieu de les ajouter une seconde fois.
 # 
 # Le modèle hiérarchique (`gabarit_hierarchique.py`) passe par une enveloppe : il n'est pas mis dans le pipeline (il met lui-même ses variables à l'échelle) et n'accepte pas de grille.
+# 
+# Le gradient boosting (`BoostingEvolution` de `gabarit_boosting.py`, gabarit commun P3) passe par `prevoir_boosting` : ni mise à l'échelle ni log, réglage avec la grille commune (`GRILLE_REFERENCE`) sur les plis temporels quand `grille` n'est pas donnée (`grille={}` : pas de réglage). Il apprend l'évolution log(prix / prix N-1) et rend un prix en €/m² (prix N-1 × évolution prévue) : la cible jugée reste le prix. `prix_n1` doit être dans les variables.
 
 # In[5]:
 
@@ -185,31 +186,39 @@ def lancer(nom, modele, variables, log=False, grille=None):
     resultats[:] = [r for r in resultats if r["modèle"] != nom]
     tests[:] = [t for t in tests if t["modèle"] != nom]
     for annee, (app, ev) in FENETRES.items():
-        prevision = pd.Series(np.nan, index=ev.index)
-        for type_bien, e in app.groupby("type_bien"):
-            idx = ev.index[ev.index.get_level_values("type_bien") == type_bien]
-            X_app, X_ev = e[variables], ev.loc[idx, variables]
-            if isinstance(modele, ModeleHierarchique):
-                assert not grille, "pas de grille pour le modèle hiérarchique"
+        if isinstance(modele, BoostingEvolution):
+            # Gabarit commun P3 : réglage, un modèle par type de bien et prévision en €/m² faits par prevoir_boosting
+            assert not log, "pas de log pour le boosting : le gabarit transforme lui-même la cible"
+            prevision, modeles = prevoir_boosting(app, ev, variables, cible=modele.cible, grille=grille)
+            for type_bien, m in modeles.items():
+                idx = ev.index[ev.index.get_level_values("type_bien") == type_bien]
+                ajustes[(nom, annee, type_bien)] = (m, ev.loc[idx, variables], ev.loc[idx, CIBLE])
+        else:
+            prevision = pd.Series(np.nan, index=ev.index)
+            for type_bien, e in app.groupby("type_bien"):
+                idx = ev.index[ev.index.get_level_values("type_bien") == type_bien]
+                X_app, X_ev = e[variables], ev.loc[idx, variables]
+                if isinstance(modele, ModeleHierarchique):
+                    assert not grille, "pas de grille pour le modèle hiérarchique"
+                    if log:
+                        X_app, X_ev = en_log(X_app), en_log(X_ev)
+                    m = Hierarchique(modele, log).fit(X_app, e[CIBLE])
+                    prevision.loc[idx] = m.predict(X_ev)
+                    ajustes[(nom, annee, type_bien)] = (m, X_ev, ev.loc[idx, CIBLE])
+                    continue
+                m = Pipeline([("echelle", StandardScaler()), ("modele", clone(modele))])
+                prefixe = "modele__"
                 if log:
                     X_app, X_ev = en_log(X_app), en_log(X_ev)
-                m = Hierarchique(modele, log).fit(X_app, e[CIBLE])
+                    m = TransformedTargetRegressor(regressor=m, func=np.log, inverse_func=np.exp)
+                    prefixe = "regressor__modele__"
+                if grille:
+                    # plis recalculés sur e (positions dans e, même ordre que X_app)
+                    m = GridSearchCV(m, {prefixe + k: v for k, v in grille.items()},
+                                     cv=plis_temporels(e), scoring="neg_mean_absolute_error")
+                m.fit(X_app, e[CIBLE])
                 prevision.loc[idx] = m.predict(X_ev)
                 ajustes[(nom, annee, type_bien)] = (m, X_ev, ev.loc[idx, CIBLE])
-                continue
-            m = Pipeline([("echelle", StandardScaler()), ("modele", clone(modele))])
-            prefixe = "modele__"
-            if log:
-                X_app, X_ev = en_log(X_app), en_log(X_ev)
-                m = TransformedTargetRegressor(regressor=m, func=np.log, inverse_func=np.exp)
-                prefixe = "regressor__modele__"
-            if grille:
-                # plis recalculés sur e (positions dans e, même ordre que X_app)
-                m = GridSearchCV(m, {prefixe + k: v for k, v in grille.items()},
-                                 cv=plis_temporels(e), scoring="neg_mean_absolute_error")
-            m.fit(X_app, e[CIBLE])
-            prevision.loc[idx] = m.predict(X_ev)
-            ajustes[(nom, annee, type_bien)] = (m, X_ev, ev.loc[idx, CIBLE])
         assert prevision.notna().all(), f"{nom} : prévisions manquantes"
         previsions[(nom, annee)] = prevision          # gardée pour comparer les modèles entre eux (section 5.2)
         evaluer(nom, ev, prevision, resultats)
@@ -225,22 +234,20 @@ def lancer(nom, modele, variables, log=False, grille=None):
 
 
 # ## 4. Modèles
-# Trois régularisations (Ridge, Lasso, Elastic Net) sur deux jeux de variables, avec la référence « prix N-1 seul ». Tous les modèles sont gardés, y compris ceux qui perdent. Tous sont faits en log (cible et variables asymétriques), comme la référence.
-# - **Modèle complet sans H3a** : prix N-1 + parc + vacance + densité (l'apport retenu de H3b).
-# - **Modèle complet avec H3a** : le précédent + équipements + délinquance (PROVISOIRE, en attendant la conclusion de Théophyle).
+# Du plus simple au plus complexe. Tous les modèles sont gardés, y compris ceux qui perdent. Les régressions, les régularisées et le modèle hiérarchique sont faits en log (cible et variables asymétriques), la référence aussi ; les arbres et le gradient boosting n'ont pas besoin du log.
 # 
-# **Réglages (choix de ce notebook, pas de la feuille de route)** : `alpha` sur une échelle logarithmique, réglé sur les plis temporels (`plis_temporels`) ; `l1_ratio` de l'Elastic Net à 0,2 / 0,5 / 0,8. Les grilles vont assez loin pour que le meilleur réglage ne soit pas collé au bord (vérifié en 4.5).
+# **Réglages (choix de ce notebook, pas de la feuille de route)** : `alpha` sur une échelle logarithmique réglé sur les plis temporels ; `l1_ratio` de l'Elastic Net à 0,2 / 0,5 / 0,8 ; grilles courtes pour l'arbre et la forêt. Le gradient boosting suit la grille commune du gabarit.
 
 # In[6]:
 
 
 REFERENCE_VARS = ["prix_n1"]
-SANS_H3A = REFERENCE_VARS + PARC + VACANCE + DENSITE
-AVEC_H3A = SANS_H3A + EQUIPEMENTS + DELINQUANCE
+MODELE_COMPLET = REFERENCE_VARS + PARC + VACANCE + DENSITE        # prix N-1 + blocs retenus (H3b)
+AVEC_EQUIPEMENTS = MODELE_COMPLET + EQUIPEMENTS                   # variante : piste H3a
 GRILLE_RIDGE = {"alpha": list(np.logspace(-4, 3, 15))}
 GRILLE_LASSO = {"alpha": list(np.logspace(-5, -1, 9))}
 GRILLE_EN = {"alpha": list(np.logspace(-5, -1, 9)), "l1_ratio": [0.2, 0.5, 0.8]}
-print(len(SANS_H3A), "variables sans H3a ;", len(AVEC_H3A), "avec H3a")
+print(len(MODELE_COMPLET), "variables dans le modèle complet ;", len(AVEC_EQUIPEMENTS), "avec les équipements")
 
 
 # ### 4.1 Référence : prix N-1 seul
@@ -284,51 +291,65 @@ ecart["commune - séparée (€/m²)"] = ecart["MAE commune"] - ecart["MAE sépa
 ecart.round(2)
 
 
-# **Lecture (étape 1.0).** Le modèle commun fait un peu mieux pour les maisons (−5 à −6 €/m² de MAE) et un peu moins bien pour les appartements (+10 €/m²), les deux années. L'écart est de 3 à 5 % de l'erreur et va dans les deux sens : ni l'un ni l'autre ne s'impose. **Choix retenu pour la suite : modèles séparés** (un par type de bien et par fenêtre). Raisons : la séparation laisse à chaque type sa propre pente sur `prix_n1` et ses propres coefficients, c'est le fonctionnement du template d'équipe et des notebooks H3b et H3c, et le commun ne gagne que sur un type de bien. *Décision à confirmer par le propriétaire du profil (décision 1.6 : « décidé par Chauve-Souris sur la naïve »).*
+# **Lecture (étape 1.0).** Le modèle commun fait un peu mieux pour les maisons (−5 à −6 €/m² de MAE) et un peu moins bien pour les appartements (+10 €/m²), les deux années. L'écart est de 3 à 5 % de l'erreur et va dans les deux sens : ni l'un ni l'autre ne s'impose. **Choix retenu pour la suite : modèles séparés** (un par type de bien et par fenêtre). Raisons : la séparation laisse à chaque type sa propre pente sur `prix_n1` et ses propres coefficients, c'est le fonctionnement du template d'équipe et des notebooks H3a, H3b et H3c, et le commun ne gagne que sur un type de bien. *Décision à confirmer par le propriétaire du profil (décision 1.6 : « décidé par Chauve-Souris sur la naïve »).*
 
-# ### 4.2 Modèle complet sans H3a : Ridge, Lasso, Elastic Net
+# ### 4.2 Étape 1.2 : Ridge, Lasso, Elastic Net sur le modèle complet
 
 # In[9]:
 
 
-RIDGE = lancer("Ridge – sans H3a", Ridge(), SANS_H3A, log=True, grille=GRILLE_RIDGE)
-LASSO = lancer("Lasso – sans H3a", Lasso(max_iter=50_000), SANS_H3A, log=True, grille=GRILLE_LASSO)
-ELASTIC = lancer("Elastic Net – sans H3a", ElasticNet(max_iter=50_000), SANS_H3A, log=True, grille=GRILLE_EN)
+RIDGE = lancer("Ridge – modèle complet", Ridge(), MODELE_COMPLET, log=True, grille=GRILLE_RIDGE)
+LASSO = lancer("Lasso – modèle complet", Lasso(max_iter=50_000), MODELE_COMPLET, log=True, grille=GRILLE_LASSO)
+ELASTIC = lancer("Elastic Net – modèle complet", ElasticNet(max_iter=50_000), MODELE_COMPLET, log=True, grille=GRILLE_EN)
 
 
-# ### 4.3 Modèle complet avec H3a (provisoire) : Ridge, Lasso, Elastic Net
-# Le Lasso ramène à zéro les coefficients des variables qui n'apportent rien : c'est lui qui dit quelles variables survivent (section 6.4). Les valeurs d'`alpha` sont petites : la cible est en log et les variables sont mises à l'échelle.
+# ### 4.3 Variante : modèle complet + équipements (piste H3a), et régularisation sur le prix N-1 seul
+# - **Équipements :** Théophyle signale un gain faible des équipements pour les maisons ; on les ajoute au modèle complet pour voir s'ils tiennent quand le reste est là.
+# - **Régularisation sur le prix N-1 seul :** H3a observe que le gain du Lasso ne vient pas de l'attractivité mais de la régularisation du prix N-1, et propose de le confirmer avec un Lasso sur le prix N-1 seul. C'est fait ici, avec Ridge et Lasso.
 
 # In[10]:
 
 
-RIDGE_H3A = lancer("Ridge – avec H3a", Ridge(), AVEC_H3A, log=True, grille=GRILLE_RIDGE)
-LASSO_H3A = lancer("Lasso – avec H3a", Lasso(max_iter=50_000), AVEC_H3A, log=True, grille=GRILLE_LASSO)
-ELASTIC_H3A = lancer("Elastic Net – avec H3a", ElasticNet(max_iter=50_000), AVEC_H3A, log=True, grille=GRILLE_EN)
+RIDGE_EQ = lancer("Ridge – complet + équipements", Ridge(), AVEC_EQUIPEMENTS, log=True, grille=GRILLE_RIDGE)
+LASSO_EQ = lancer("Lasso – complet + équipements", Lasso(max_iter=50_000), AVEC_EQUIPEMENTS, log=True, grille=GRILLE_LASSO)
+ELASTIC_EQ = lancer("Elastic Net – complet + équipements", ElasticNet(max_iter=50_000), AVEC_EQUIPEMENTS, log=True, grille=GRILLE_EN)
+RIDGE_REF = lancer("Ridge – prix N-1 seul", Ridge(), REFERENCE_VARS, log=True, grille=GRILLE_RIDGE)
+LASSO_REF = lancer("Lasso – prix N-1 seul", Lasso(max_iter=50_000), REFERENCE_VARS, log=True, grille=GRILLE_LASSO)
 
 
-# ### 4.4 Gradient boosting et modèle hiérarchique
-# Hors de ce notebook : ils sont faits aux étapes 1.4 (gabarit gradient boosting de Théophyle, avec l'emploi pour les maisons) et 1.3 (gabarit hiérarchique).
+# ### 4.4 Étape 1.3 : modèle hiérarchique (P4)
+# Une ordonnée à l'origine propre à chaque sous-bassin (`gabarit_hierarchique.py`), en log, sur le modèle complet. L'ICC mesure la part de la variance qui tient au sous-bassin : proche de 0, l'effet propre du territoire n'apporte rien au-delà du prix N-1 et le modèle se comporte comme une régression simple. Des avertissements de convergence sont attendus dans ce cas (solution sur le bord).
 
 # In[11]:
 
 
-# Réglage retenu par la validation (alpha, l1_ratio) pour chaque modèle : le meilleur réglage est-il collé au bord de la grille ?
-reglages = pd.DataFrame(
-    {(nom, a, t): {k.split("__")[-1]: v for k, v in m.best_params_.items()}
-     for (nom, a, t), (m, _, _) in ajustes.items() if hasattr(m, "best_params_")}).T
-reglages.index.names = ["modèle", "année jugée", "type de bien"]
-reglages
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")          # convergence du modèle mixte : relevée par m.modele_.converge_ (ci-dessous)
+    HIERARCHIQUE = lancer("Hiérarchique – modèle complet", ModeleHierarchique(), MODELE_COMPLET, log=True)
+icc = pd.DataFrame({(a, t): {"ICC": ajustes[(HIERARCHIQUE, a, t)][0].modele_.icc_,
+                             "convergence": ajustes[(HIERARCHIQUE, a, t)][0].modele_.converge_}
+                    for a in commun.ANNEES_JUGEES for t in ["appartement", "maison"]}).T
+icc.index.names = ["année jugée", "type de bien"]
+icc.round(4)
 
 
-# ### 4.5 Les réglages retenus
-# Tableau ci-dessus : `alpha` (et `l1_ratio`) retenus pour chaque modèle, année et type de bien. Un alpha qui tombe sur la première ou la dernière valeur de la grille dit que la grille est trop étroite (voir « Comment lire »).
+# ### 4.5 Étape 1.4 : arbre, forêt et gradient boosting (P3)
+# - **Gradient boosting (gabarit commun)** : il apprend l'évolution du prix (log(prix / prix N-1)) et rend une prévision en €/m². Grille commune du gabarit.
+# - **Arbre et forêt** : prévoient directement le niveau du prix, comme le demande la feuille de route. Ils rendent la moyenne des prix de chaque feuille et perdent la précision du prix N-1 de chaque sous-bassin (raison pour laquelle le gabarit apprend l'évolution) : ils servent de contraste. Pas de log, pas d'imputation nécessaire (table masquée).
 
-# In[ ]:
+# In[12]:
 
 
+BOOSTING = lancer("Gradient boosting – modèle complet", BoostingEvolution(), MODELE_COMPLET)
+ARBRE = lancer("Arbre – modèle complet", DecisionTreeRegressor(random_state=commun.GRAINE), MODELE_COMPLET,
+               grille={"max_depth": [3, 5, 8], "min_samples_leaf": [20, 50]})
+FORET = lancer("Forêt – modèle complet", RandomForestRegressor(n_estimators=200, random_state=commun.GRAINE, n_jobs=-1),
+               MODELE_COMPLET, grille={"max_depth": [5, 10], "min_samples_leaf": [20, 50]})
 
 
+# ### 4.6 Emploi (H3c) pour les maisons : à ajouter
+# Gabrielle retient le bloc emploi (`evol_emploi_n2_n1`, `emploi_par_logement`) pour les maisons avec le gradient boosting. Ces deux colonnes sont dans `fe_cible_emploi_sbv.parquet`, pas dans la table de modélisation : le boosting avec emploi se lance ici une fois ce fichier joint (année et sous-bassin). Pas fait dans cette version.
 
 # ## 5. Mesures et tests
 # Trois tableaux, du plus simple au plus exigeant :
@@ -340,14 +361,14 @@ reglages
 #    - **Rang-bisériale** (taille d'effet) : de −1 (le modèle fait mieux partout) à +1 (il fait moins bien partout) ; autour de 0, pas de différence nette.
 # 3. **`decision` : la règle de décision.** Une année est réussie si l'IC est entièrement sous 0, la rang-bisériale négative et le gain d'au moins 3 %. Un modèle est retenu s'il réussit la majorité des années jugées (ici, les deux).
 
-# In[12]:
+# In[13]:
 
 
 res = pd.DataFrame(resultats)
 res.round(2)
 
 
-# In[13]:
+# In[14]:
 
 
 tst = pd.DataFrame(tests)
@@ -356,7 +377,7 @@ tst.round(3)
 
 # ### 5.1 Règle de décision contre la naïve
 
-# In[14]:
+# In[15]:
 
 
 SEUIL_GAIN = 3      # % de gain sur la MAE de la comparaison, fixé avant les résultats
@@ -377,9 +398,9 @@ def regle_decision(res, tst, comparaison="naïve"):
 regle_decision(res, tst)
 
 
-# **Comment lire le tableau des tests.** Prenons « Ridge – sans H3a », appartements, 2023 : l'écart de MAE avec la naïve est positif (le modèle fait un peu moins bien) et l'IC 95 % contient 0, donc on ne peut pas conclure à une différence. La même ligne en 2024 a un IC entièrement au-dessus de 0 : le modèle fait vraiment moins bien que la naïve.
+# **Comment lire le tableau des tests.** Prenons « Ridge – modèle complet », appartements, 2023 : l'écart de MAE avec la naïve est positif (le modèle fait un peu moins bien) et l'IC 95 % contient 0 : on ne peut pas conclure à une différence. La même ligne en 2024 a un IC entièrement au-dessus de 0 : le modèle fait vraiment moins bien que la naïve.
 # 
-# **Résultats contre la naïve :** aucun modèle n'est retenu, pour les deux types de bien (0 année réussie sur 2 partout). Le gain sur la naïve est négatif dans tous les cas : de −1 % (appartements 2023) à −57 % (maisons 2023, avec H3a). Même le modèle « prix N-1 seul » perd (−12 % à −66 %). Les modèles régularisés réduisent l'écart (appartements 2024 : −37 % contre −50 %), sans le combler.
+# **Résultats contre la naïve :** aucun modèle n'est retenu, pour les deux types de bien (0 année réussie sur 2 partout, y compris le hiérarchique, le gradient boosting, l'arbre et la forêt). Le gain sur la naïve est négatif dans tous les cas : de −1 % (appartements 2023, régularisées) à −83 % (maisons 2023, forêt). Le modèle « prix N-1 seul » perd aussi (−12 % à −66 %).
 
 # ### 5.2 Le bloc apporte-t-il quelque chose au prix N-1 seul ?
 # La question propre à l'hypothèse : les variables du bloc améliorent-elles la prévision **par rapport au modèle « prix N-1 seul »** ?
@@ -388,7 +409,7 @@ regle_decision(res, tst)
 # 
 # Lecture : un gain positif et un intervalle du bootstrap entièrement sous 0 veulent dire que le modèle fait vraiment mieux que la référence.
 
-# In[15]:
+# In[16]:
 
 
 resultats_ref, tests_ref = [], []
@@ -413,25 +434,28 @@ display(tst_ref[["modèle", "type de bien", "année jugée", "écart de MAE avec
 # #### Règle de décision contre la référence
 # Même règle que contre la naïve, avec le modèle « prix N-1 seul » à la place de la naïve.
 
-# In[16]:
+# In[17]:
 
 
 regle_decision(res_ref, tst_ref, comparaison="référence")
 
 
-# **Comment lire le tableau des tests contre la référence.** Prenons « Lasso – sans H3a », maisons, 2024 : l'écart de MAE avec « prix N-1 seul » est d'environ −18 €/m² et l'IC 95 % est entièrement sous 0 (haut à −14 €/m²), pour un gain de 8,3 % : le modèle fait vraiment mieux que la référence.
+# **Comment lire le tableau des tests contre la référence.** Prenons « Lasso – modèle complet », maisons, 2024 : le gain sur « prix N-1 seul » est de 8,3 % et l'IC 95 % est entièrement sous 0 (haut à −14 €/m²) : le modèle fait vraiment mieux que la référence.
 # 
 # **Résultats contre le modèle « prix N-1 seul » :**
-# - **Sans H3a** (prix N-1 + parc + vacance + densité) : les trois modèles sont retenus pour les deux types de bien, avec 2 années réussies sur 2. Gains de 7 à 11 %. C'est cohérent avec la conclusion de Cécile.
-# - **Avec H3a** (tous les indicateurs d'équipements et de délinquance) : le résultat se dégrade. Seuls le Lasso et l'Elastic Net sont retenus, pour les appartements. Pour les maisons, aucun modèle n'est retenu : en 2023, le gain devient négatif (−2,7 %, contre +7 % sans H3a). Ajouter tout le bloc H3a sans le sélectionner apporte du bruit. À reprendre avec la conclusion de Théophyle.
-# - **Réserve :** ce gain est mesuré contre une référence qui perd elle-même contre la naïve. Il ne dit pas que le modèle est utilisable.
+# - **Modèle complet (parc + vacance + densité) :** Ridge, Lasso, Elastic Net et hiérarchique sont retenus pour les deux types de bien (2 années sur 2). Gains de 7 à 11 %.
+# - **Piste H3a, équipements en plus :** les trois régularisées restent retenues ; pour les maisons le gain monte un peu (8 à 10 % contre 7 à 8 %), pour les appartements il ne change pas. Écart de quelques €/m² : à ne pas sur-lire.
+# - **Régularisation seule (prix N-1 seul) :** Ridge apporte 1 à 2 % ; Lasso apporte 6 % (2023) et 9 % (2024) aux appartements, et rien aux maisons (0 à 1 %). Pour les appartements, une grande part du gain du modèle complet vient donc de la régularisation du prix N-1, comme le suggérait H3a ; pour les maisons, il vient bien des variables du bloc.
+# - **Gradient boosting :** gain de 2 à 5 % ; retenu pour les maisons en 2024 seulement (2023 : 1,8 %, sous le seuil), pas pour les appartements. **Arbre et forêt :** moins bons que la référence (−4 à −20 %), comme attendu quand on prévoit le niveau plutôt que l'évolution.
+# - **Modèle commun :** moins bon que le séparé pour les appartements (−5 %), un peu meilleur pour les maisons (+2 à +3 %).
+# - **Réserve :** ces gains sont mesurés contre une référence qui perd elle-même contre la naïve. Ils ne disent pas que le modèle est utilisable.
 
 # ## 6. Interprétation
 
 # ### 6.1 Contexte : le marché s'est-il retourné ?
 # Les modèles apprennent sur les années de hausse 2020-2022, puis sont jugés sur 2023 et 2024. Pour lire leurs résultats, on mesure l'évolution du prix d'une année sur l'autre (prix / prix N-1 − 1), en moyenne et en médiane, par année et par type de bien, jusqu'à 2024. L'année 2025, réservée au test final, n'est pas regardée.
 
-# In[17]:
+# In[18]:
 
 
 jusqua_2024 = table[table["annee"] <= commun.ANNEE_VALIDATION]
@@ -445,10 +469,10 @@ retournement.unstack()
 # ### 6.2 Importance des variables
 # Importance par permutation, sur l'année jugée : on mélange au hasard les valeurs d'une variable entre les sous-bassins, 10 fois, et on mesure de combien l'erreur du modèle change (moyenne et écart-type). Une hausse : la variable était utile ; 0 : le modèle ne s'en sert pas ; une baisse : sur cette année, la variable dessert le modèle. Une variable compte si sa valeur dépasse nettement deux écarts-types. Choisir le modèle, l'année jugée et le type de bien.
 
-# In[18]:
+# In[19]:
 
 
-choix = (LASSO_H3A, 2024, "maison")        # modèle, année jugée, type de bien étudiés (à adapter)
+choix = (LASSO, 2024, "maison")        # modèle, année jugée, type de bien étudiés (à adapter)
 m, X_ev, y_ev = ajustes[choix]
 imp = permutation_importance(m, X_ev, y_ev, scoring="neg_mean_absolute_error",
                              n_repeats=10, random_state=commun.GRAINE)
@@ -460,7 +484,7 @@ pd.DataFrame({"hausse de la MAE (€/m²)": imp.importances_mean,
 # ### 6.3 Analyse des erreurs selon le contrôle qualité
 # L'erreur est-elle plus grande là où les données sont estimées ou complétées ? Pour chaque variable de contrôle qualité : groupe « part nulle », puis quartiles parmi les parts non nulles. Par groupe : erreur moyenne en €/m² et en % du prix (l'erreur en €/m² grandit avec le niveau des prix), et erreur moyenne signée (positive : le modèle surestime). Rho de Spearman entre la variable et l'erreur, en €/m² et en %. Même modèle qu'en 6.2.
 
-# In[19]:
+# In[20]:
 
 
 CONTROLE = ["part_indicateurs_estimes", "part_logements_taux_impute", "part_menages_couverts"]
@@ -486,37 +510,41 @@ for v in CONTROLE:
 
 
 # ### 6.4 Quelles variables survivent au Lasso ?
-# Coefficients du Lasso « avec H3a » (variables transformées et mises à l'échelle, cible en log), année jugée 2024, par type de bien. Un coefficient nul : la variable est écartée à l'alpha retenu. Le coefficient de `prix_n1` est le poids du prix de l'année précédente.
+# Coefficients du Lasso « modèle complet » (variables transformées et mises à l'échelle, cible en log), année jugée 2024, par type de bien. Un coefficient nul : la variable est écartée à l'alpha retenu.
 
-# In[20]:
+# In[21]:
 
 
 def coefficients(nom, annee, type_bien):
     m = ajustes[(nom, annee, type_bien)][0]
     est = m.best_estimator_ if hasattr(m, "best_estimator_") else m
-    coef = est.regressor_.named_steps["modele"].coef_
-    return pd.Series(coef, index=AVEC_H3A)
+    return pd.Series(est.regressor_.named_steps["modele"].coef_, index=MODELE_COMPLET)
 
-coef = pd.DataFrame({t: coefficients(LASSO_H3A, 2024, t) for t in ["appartement", "maison"]})
+coef = pd.DataFrame({t: coefficients(LASSO, 2024, t) for t in ["appartement", "maison"]})
 print({t: f"{int((coef[t] != 0).sum())} variables sur {len(coef)}" for t in coef})
 coef.loc[(coef != 0).any(axis=1)].sort_values("maison", key=abs, ascending=False).round(4)
 
 
 # ## 7. Conclusion
-# **Question :** une fois les blocs retenus réunis, que reste-t-il comme gain au-delà du prix N-1, et quelles variables survivent ?
+# **Questions :** (1.0) modèle commun ou séparé ? Une fois les blocs retenus réunis : (1.2) quel gain reste-t-il au-delà du prix N-1 et quelles variables survivent ? (1.3) l'effet propre du sous-bassin apporte-t-il quelque chose ? (1.4) un arbre, une forêt ou un boosting font-ils mieux ?
 # 
-# **0. Modèle commun ou séparé (1.0) :** séparé (section 4.1 bis). Le commun gagne de 5 à 6 €/m² pour les maisons et perd de 10 €/m² pour les appartements : l'écart est faible et va dans les deux sens.
+# **0. Modèle commun ou séparé (1.0) :** séparé (section 4.1 bis). Le commun gagne de 5 à 6 €/m² pour les maisons et perd de 10 €/m² pour les appartements : l'écart est faible et va dans les deux sens. *À confirmer.*
 # 
-# **1. Contre la naïve : aucun modèle n'est retenu.** 0 année réussie sur 2 pour tous les modèles régularisés (Ridge, Lasso, Elastic Net), avec ou sans H3a, appartements comme maisons. Le gain sur la naïve va de −1 % à −57 %. La cause est celle déjà vue en H3b et H3c : les modèles apprennent sur 2020-2022 (+5 à +10 % par an) et sont jugés sur 2023 (+1 à +3 %) puis 2024 (−1 à −2 %) ; ils prolongent la hausse et surestiment les prix. L'erreur signée est positive partout (surestimation de +110 à +340 €/m² selon les groupes, section 6.3) ; l'erreur en % du prix reste stable (8 à 10 %) d'un groupe de contrôle qualité à l'autre : la qualité des données n'explique pas l'erreur. Le modèle « prix N-1 seul » perd déjà : le problème ne vient pas des blocs.
+# **1. Contre la naïve : aucun modèle n'est retenu** (0 année réussie sur 2, tous modèles confondus : régularisées, hiérarchique, arbre, forêt, boosting). Gain sur la naïve de −1 % à −83 %. Cause, commune à H3a, H3b et H3c : les modèles apprennent sur 2020-2022 (+5 à +10 % par an) et sont jugés sur 2023 (+1 à +3 %) puis 2024 (−1 à −3 %) ; ils prolongent la hausse et surestiment les prix. L'erreur signée est positive partout (+100 à +340 €/m² selon les groupes de contrôle qualité). Le modèle « prix N-1 seul » perd déjà : le problème ne vient pas des blocs.
 # 
-# **2. Contre « prix N-1 seul » : le modèle complet sans H3a apporte un gain réel mais modeste.** Les trois régularisations sont retenues pour les deux types de bien (gain de 7 à 11 %, IC 95 % sous 0 les deux années). Le Lasso garde 10 variables sur 25 pour les appartements et 13 pour les maisons (section 6.4, version avec H3a). `prix_n1` domine très largement (section 6.2 : permuter cette variable fait monter la MAE de près de 1 000 €/m² sur les maisons 2024). Les autres variables ont une importance nulle ou négative en 2024 (`taux_vacance` : −7 €/m²), c'est-à-dire que permuter la variable améliore même un peu la prévision : le coefficient appris sur 2020-2023 ne tient plus pendant le retournement. Les coefficients du Lasso (section 6.4) les plus forts après `prix_n1` sont `taux_vacance`, `part_rsec` et `densite_population`. Avec H3a au complet, le gain disparaît pour les maisons : le bloc doit être sélectionné.
+# **2. Contre « prix N-1 seul » : le modèle complet apporte un gain réel mais modeste (7 à 11 %).**
+# - Ridge, Lasso, Elastic Net et le hiérarchique sont retenus pour les deux types de bien. Le gradient boosting l'est pour les maisons en 2024 seulement ; l'arbre et la forêt ne le sont pas.
+# - **Où vient le gain :** pour les maisons, des variables du bloc (le Lasso sur le prix N-1 seul ne gagne rien) ; pour les appartements, en grande partie de la régularisation du prix N-1 (Lasso sur le prix N-1 seul : 6 à 9 %), ce qui confirme la remarque de H3a.
+# - **Équipements (piste H3a) :** un petit gain de plus pour les maisons (8 à 10 % contre 7 à 8 %), rien pour les appartements.
 # 
-# **3. Pas de gain de la régularisation sur la régression simple.** Ridge, Lasso et Elastic Net sont proches les uns des autres (écarts de MAE de quelques €/m²). Les variables que le Lasso garde en premier sont celles de H3b (vacance, résidences secondaires, densité, ancienneté du parc) ; les équipements et la délinquance pèsent peu.
+# **3. Variables (1.2).** `prix_n1` domine très largement (section 6.2). Le Lasso garde 8 variables sur 12 pour les appartements et les 12 pour les maisons (section 6.4). Après `prix_n1`, les plus fortes sont la densité, la part de résidences secondaires et la vacance. En 2024, seules `prix_n1` et la part de résidences secondaires aident (importance par permutation) : les autres ont un effet appris pendant la hausse qui dessert le modèle pendant le retournement.
 # 
-# **À valider ou à refaire quand les conclusions arrivent**
-# - H3a de Théophyle : remplacer `EQUIPEMENTS` et `DELINQUANCE` par les variables retenues, par type de bien.
-# - Les sept variables « qui ne comptaient nulle part à l'audit » : liste non reçue ; à repérer parmi les coefficients nuls du Lasso.
-# - Réglages : plusieurs `alpha` tombent sur le bord de la grille (Ridge et Lasso pour les maisons, 1e-4 et 1e-5 : proche d'une régression non pénalisée). Les chiffres changent peu mais le bord est atteint.
-# - Choix « un modèle par type de bien » : à aligner sur la décision de l'étape 1.0.
+# **4. Hiérarchique (1.3).** L'ICC est de 0 à 0,0008 : l'effet propre du sous-bassin n'apporte rien au-delà du prix N-1 et le modèle se comporte comme la régression simple (même MAE à 1-2 €/m² près). Un modèle (maisons 2023) n'a pas convergé, ce qui est attendu quand la variance de groupe est quasi nulle.
 # 
-# **Limites :** deux années jugées, toutes deux pendant le retournement du marché ; l'emploi (H3c) n'est pas inclus ; l'analyse porte sur le niveau de prix et non sur son évolution.
+# **5. Arbres et boosting (1.4).** Le gradient boosting (évolution du prix) fait mieux que l'arbre et la forêt (niveau du prix) mais moins bien que les régularisées. L'emploi pour les maisons (H3c) n'est pas encore ajouté (section 4.6).
+# 
+# **6. Qualité des données :** l'erreur n'est pas concentrée dans les territoires aux données estimées ou complétées ; rapportée au prix, elle est de 8 à 10 % dans tous les groupes (section 6.3).
+# 
+# **Meilleur modèle du niveau 1 :** les régularisées complètes sont à quelques €/m² les unes des autres (appartements 2024 : 195 à 203 ; maisons 2024 : 193 à 197, contre 148 et 129 pour la naïve). À désigner avant le diagnostic T1 ; le plus simple et stable est le Ridge ou l'Elastic Net sur le modèle complet.
+# 
+# **Limites :** deux années jugées, toutes deux pendant le retournement ; plusieurs variantes comparées sur les mêmes années (celle qui ressort a pu en profiter) ; l'importance des variables porte sur une année et un type de bien ; l'emploi n'est pas inclus ; plusieurs `alpha` tombent sur le bord de la grille (maisons : 1e-4 et 1e-5, proche d'une régression non pénalisée).
