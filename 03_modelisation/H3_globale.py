@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# # Modélisation – H3 globale : le territoire précise peu la prévision au-delà du prix N-1 (tour 1, niveau 1) · diagnostic T1 · test 2025
+# # Tour 1 — H3 globale : le territoire précise peu la prévision au-delà du prix N-1
 # **Contributeurs :** Christian · **Date :** 05/11/2026
 # 
 # Notebook construit à partir du template commun de l'équipe. Il passe par `commun.py` pour tout ce qui doit être identique d'une hypothèse à l'autre : la table, le masque des lignes, les fenêtres, la naïve, `evaluer` et `tester`.
