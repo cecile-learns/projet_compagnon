@@ -84,6 +84,10 @@ print("Table :", table.shape)
 for a, (app, ev) in FENETRES.items():
     print(f"Fenêtre {a} : apprentissage {sorted(app['annee'].unique())} ({len(app)} lignes) | jugée {a} ({len(ev)} lignes)")
 
+import matplotlib.pyplot as plt
+plt.rcParams.update({"figure.dpi": 110, "axes.spines.top": False, "axes.spines.right": False})
+BLEU, GRIS = "#1f4e79", "#8c8c8c"      # bleu : modèle ; gris : naïve ou pas de différence nette
+
 
 # ## 2. Constat rapide
 # Distribution des variables du bloc et lien avec le prix (rho de Spearman), sur les années d'apprentissage de la première fenêtre seulement : l'année jugée n'est jamais regardée avant la modélisation.
@@ -291,7 +295,7 @@ ecart["commune - séparée (€/m²)"] = ecart["MAE commune"] - ecart["MAE sépa
 ecart.round(2)
 
 
-# **Lecture (étape 1.0).** Le modèle commun fait un peu mieux pour les maisons (−5 à −6 €/m² de MAE) et un peu moins bien pour les appartements (+10 €/m²), les deux années. L'écart est de 3 à 5 % de l'erreur et va dans les deux sens : ni l'un ni l'autre ne s'impose. **Choix retenu pour la suite : modèles séparés** (un par type de bien et par fenêtre). Raisons : la séparation laisse à chaque type sa propre pente sur `prix_n1` et ses propres coefficients, c'est le fonctionnement du template d'équipe et des notebooks H3a, H3b et H3c, et le commun ne gagne que sur un type de bien. *Décision à confirmer par le propriétaire du profil (décision 1.6 : « décidé par Chauve-Souris sur la naïve »).*
+# **Lecture (étape 1.0).** Le modèle commun fait un peu mieux pour les maisons (−5 à −6 €/m² de MAE) et un peu moins bien pour les appartements (+10 €/m²), les deux années. L'écart est de 3 à 5 % de l'erreur et va dans les deux sens : ni l'un ni l'autre ne s'impose. **Choix retenu pour la suite : modèles séparés** (un par type de bien et par fenêtre). Raisons : la séparation laisse à chaque type sa propre pente sur `prix_n1` et ses propres coefficients, c'est le fonctionnement du template d'équipe et des notebooks H3a, H3b et H3c, et le commun ne gagne que sur un type de bien. *Choix confirmé avec l'équipe : modèles séparés par type de bien.*
 
 # ### 4.2 Étape 1.2 : Ridge, Lasso, Elastic Net sur le modèle complet
 
@@ -303,11 +307,33 @@ LASSO = lancer("Lasso – modèle complet", Lasso(max_iter=50_000), MODELE_COMPL
 ELASTIC = lancer("Elastic Net – modèle complet", ElasticNet(max_iter=50_000), MODELE_COMPLET, log=True, grille=GRILLE_EN)
 
 
+# In[10]:
+
+
+import matplotlib.pyplot as plt
+fig, axes = plt.subplots(2, 2, figsize=(11, 7))
+for j, (nom, etiquette) in enumerate([(RIDGE, "Ridge"), (LASSO, "Lasso")]):
+    for i, tb in enumerate(["appartement", "maison"]):
+        m = ajustes[(nom, 2024, tb)][0]
+        cv = pd.DataFrame(m.cv_results_).sort_values("param_regressor__modele__alpha")
+        a = cv["param_regressor__modele__alpha"].astype(float)
+        ax = axes[i, j]
+        ax.semilogx(a, -cv["mean_test_score"], marker="o", color="#1f4e79")
+        ax.axvline(m.best_params_["regressor__modele__alpha"], color="#d98c3f", ls="--", label="alpha retenu")
+        ax.set_title(f"{etiquette}, {tb} (fenêtre 2024)")
+        ax.set_xlabel("alpha (échelle log)")
+        ax.set_ylabel("MAE de validation (€/m²)")
+        ax.legend(frameon=False, fontsize=8)
+fig.suptitle("Réglage de alpha sur les plis temporels : un alpha au bord de la grille signale une grille trop étroite", y=1.0)
+fig.tight_layout()
+plt.show()
+
+
 # ### 4.3 Variante : modèle complet + équipements (piste H3a), et régularisation sur le prix N-1 seul
 # - **Équipements :** Théophyle signale un gain faible des équipements pour les maisons ; on les ajoute au modèle complet pour voir s'ils tiennent quand le reste est là.
 # - **Régularisation sur le prix N-1 seul :** H3a observe que le gain du Lasso ne vient pas de l'attractivité mais de la régularisation du prix N-1, et propose de le confirmer avec un Lasso sur le prix N-1 seul. C'est fait ici, avec Ridge et Lasso.
 
-# In[10]:
+# In[11]:
 
 
 RIDGE_EQ = lancer("Ridge – complet + équipements", Ridge(), AVEC_EQUIPEMENTS, log=True, grille=GRILLE_RIDGE)
@@ -320,7 +346,7 @@ LASSO_REF = lancer("Lasso – prix N-1 seul", Lasso(max_iter=50_000), REFERENCE_
 # ### 4.4 Étape 1.3 : modèle hiérarchique (P4)
 # Une ordonnée à l'origine propre à chaque sous-bassin (`gabarit_hierarchique.py`), en log, sur le modèle complet. L'ICC mesure la part de la variance qui tient au sous-bassin : proche de 0, l'effet propre du territoire n'apporte rien au-delà du prix N-1 et le modèle se comporte comme une régression simple. Des avertissements de convergence sont attendus dans ce cas (solution sur le bord).
 
-# In[11]:
+# In[12]:
 
 
 import warnings
@@ -338,7 +364,7 @@ icc.round(4)
 # - **Gradient boosting (gabarit commun)** : il apprend l'évolution du prix (log(prix / prix N-1)) et rend une prévision en €/m². Grille commune du gabarit.
 # - **Arbre et forêt** : prévoient directement le niveau du prix, comme le demande la feuille de route. Ils rendent la moyenne des prix de chaque feuille et perdent la précision du prix N-1 de chaque sous-bassin (raison pour laquelle le gabarit apprend l'évolution) : ils servent de contraste. Pas de log, pas d'imputation nécessaire (table masquée).
 
-# In[12]:
+# In[13]:
 
 
 BOOSTING = lancer("Gradient boosting – modèle complet", BoostingEvolution(), MODELE_COMPLET)
@@ -361,14 +387,14 @@ FORET = lancer("Forêt – modèle complet", RandomForestRegressor(n_estimators=
 #    - **Rang-bisériale** (taille d'effet) : de −1 (le modèle fait mieux partout) à +1 (il fait moins bien partout) ; autour de 0, pas de différence nette.
 # 3. **`decision` : la règle de décision.** Une année est réussie si l'IC est entièrement sous 0, la rang-bisériale négative et le gain d'au moins 3 %. Un modèle est retenu s'il réussit la majorité des années jugées (ici, les deux).
 
-# In[13]:
+# In[14]:
 
 
 res = pd.DataFrame(resultats)
 res.round(2)
 
 
-# In[14]:
+# In[15]:
 
 
 tst = pd.DataFrame(tests)
@@ -377,7 +403,7 @@ tst.round(3)
 
 # ### 5.1 Règle de décision contre la naïve
 
-# In[15]:
+# In[16]:
 
 
 SEUIL_GAIN = 3      # % de gain sur la MAE de la comparaison, fixé avant les résultats
@@ -398,6 +424,43 @@ def regle_decision(res, tst, comparaison="naïve"):
 regle_decision(res, tst)
 
 
+# In[17]:
+
+
+def forest(df, col, titre):
+    """Écart de MAE de chaque modèle avec une référence, avec l'IC 95 % : bleu = mieux, gris = pas de différence nette, orange = moins bien."""
+    d = df.copy()
+    d["m"] = d["modèle"].str.replace(f"{HYPOTHESE} – ", "", regex=False)
+    modeles = list(dict.fromkeys(d["m"]))
+    annees, types = sorted(d["année jugée"].unique()), sorted(d["type de bien"].unique())
+    fig, axes = plt.subplots(len(types), len(annees), figsize=(12.5, 0.34 * len(modeles) * len(types) + 1.8), sharey=True, squeeze=False)
+    for i, tb in enumerate(types):
+        for j, a in enumerate(annees):
+            ax = axes[i, j]
+            s = d[(d["type de bien"] == tb) & (d["année jugée"] == a)].set_index("m").reindex(modeles)
+            for y, (m, r) in enumerate(s.iterrows()):
+                bas, haut = r["IC 95 % bas (€/m²)"], r["IC 95 % haut (€/m²)"]
+                c = BLEU if haut < 0 else ("#d98c3f" if bas > 0 else GRIS)
+                ax.hlines(y, bas, haut, color=c, lw=2)
+                ax.plot(r[col], y, "o", color=c)
+            ax.axvline(0, color="black", lw=1)
+            ax.set_yticks(range(len(modeles)), modeles, fontsize=8)
+            ax.invert_yaxis()
+            ax.set_title(f"{tb}, jugée {a}", fontsize=10)
+            if i == len(types) - 1:
+                ax.set_xlabel("écart de MAE (€/m²) ; à gauche de 0 : mieux")
+    fig.suptitle(titre, y=1.0)
+    fig.tight_layout()
+    plt.show()
+
+
+# In[18]:
+
+
+forest(tst, "écart de MAE avec la naïve (€/m²)",
+       "Écart de MAE avec la naïve (IC 95 %) : aucun modèle n'est à gauche de 0 pour les deux années")
+
+
 # **Comment lire le tableau des tests.** Prenons « Ridge – modèle complet », appartements, 2023 : l'écart de MAE avec la naïve est positif (le modèle fait un peu moins bien) et l'IC 95 % contient 0 : on ne peut pas conclure à une différence. La même ligne en 2024 a un IC entièrement au-dessus de 0 : le modèle fait vraiment moins bien que la naïve.
 # 
 # **Résultats contre la naïve :** aucun modèle n'est retenu, pour les deux types de bien (0 année réussie sur 2 partout, y compris le hiérarchique, le gradient boosting, l'arbre et la forêt). Le gain sur la naïve est négatif dans tous les cas : de −1 % (appartements 2023, régularisées) à −83 % (maisons 2023, forêt). Le modèle « prix N-1 seul » perd aussi (−12 % à −66 %).
@@ -409,7 +472,7 @@ regle_decision(res, tst)
 # 
 # Lecture : un gain positif et un intervalle du bootstrap entièrement sous 0 veulent dire que le modèle fait vraiment mieux que la référence.
 
-# In[16]:
+# In[19]:
 
 
 resultats_ref, tests_ref = [], []
@@ -434,10 +497,17 @@ display(tst_ref[["modèle", "type de bien", "année jugée", "écart de MAE avec
 # #### Règle de décision contre la référence
 # Même règle que contre la naïve, avec le modèle « prix N-1 seul » à la place de la naïve.
 
-# In[17]:
+# In[20]:
 
 
 regle_decision(res_ref, tst_ref, comparaison="référence")
+
+
+# In[21]:
+
+
+forest(tst_ref, "écart de MAE avec la référence (€/m²)",
+       "Écart de MAE avec « prix N-1 seul » (IC 95 %) : les modèles complets régularisés sont à gauche de 0")
 
 
 # **Comment lire le tableau des tests contre la référence.** Prenons « Lasso – modèle complet », maisons, 2024 : le gain sur « prix N-1 seul » est de 8,3 % et l'IC 95 % est entièrement sous 0 (haut à −14 €/m²) : le modèle fait vraiment mieux que la référence.
@@ -455,7 +525,7 @@ regle_decision(res_ref, tst_ref, comparaison="référence")
 # ### 6.1 Contexte : le marché s'est-il retourné ?
 # Les modèles apprennent sur les années de hausse 2020-2022, puis sont jugés sur 2023 et 2024. Pour lire leurs résultats, on mesure l'évolution du prix d'une année sur l'autre (prix / prix N-1 − 1), en moyenne et en médiane, par année et par type de bien, jusqu'à 2024. L'année 2025, réservée au test final, n'est pas regardée.
 
-# In[18]:
+# In[22]:
 
 
 jusqua_2024 = table[table["annee"] <= commun.ANNEE_VALIDATION]
@@ -466,10 +536,32 @@ retournement = (evolution.groupby([jusqua_2024["annee"], jusqua_2024.index.get_l
 retournement.unstack()
 
 
+# In[23]:
+
+
+import matplotlib.pyplot as plt
+plt.rcParams.update({"figure.dpi": 110, "axes.spines.top": False, "axes.spines.right": False})
+BLEU, GRIS = "#1f4e79", "#8c8c8c"
+fig, ax = plt.subplots(figsize=(9, 4.2))
+mean = retournement["évolution moyenne (%)"].unstack()
+ax.axvspan(2019.5, 2022.5, color="#e8eef5", zorder=0)
+ax.axvspan(2022.5, 2024.5, color="#f7e9dc", zorder=0)
+ax.plot(mean.index, mean["appartement"], marker="o", color=BLEU, label="appartement")
+ax.plot(mean.index, mean["maison"], marker="o", color="#d98c3f", label="maison")
+ax.axhline(0, color="black", lw=1)
+ax.text(2021, ax.get_ylim()[1] * 0.92, "apprentissage 2020-2022", ha="center", fontsize=9, color=BLEU)
+ax.text(2023.5, ax.get_ylim()[1] * 0.92, "années jugées", ha="center", fontsize=9, color="#a0612a")
+ax.set_ylabel("évolution moyenne du prix (% par an)")
+ax.set_title("Les modèles apprennent la hausse, puis sont jugés pendant le retournement")
+ax.legend(frameon=False, loc="lower left")
+fig.tight_layout()
+plt.show()
+
+
 # ### 6.2 Importance des variables
 # Importance par permutation, sur l'année jugée : on mélange au hasard les valeurs d'une variable entre les sous-bassins, 10 fois, et on mesure de combien l'erreur du modèle change (moyenne et écart-type). Une hausse : la variable était utile ; 0 : le modèle ne s'en sert pas ; une baisse : sur cette année, la variable dessert le modèle. Une variable compte si sa valeur dépasse nettement deux écarts-types. Choisir le modèle, l'année jugée et le type de bien.
 
-# In[19]:
+# In[24]:
 
 
 choix = (LASSO, 2024, "maison")        # modèle, année jugée, type de bien étudiés (à adapter)
@@ -484,7 +576,7 @@ pd.DataFrame({"hausse de la MAE (€/m²)": imp.importances_mean,
 # ### 6.3 Analyse des erreurs selon le contrôle qualité
 # L'erreur est-elle plus grande là où les données sont estimées ou complétées ? Pour chaque variable de contrôle qualité : groupe « part nulle », puis quartiles parmi les parts non nulles. Par groupe : erreur moyenne en €/m² et en % du prix (l'erreur en €/m² grandit avec le niveau des prix), et erreur moyenne signée (positive : le modèle surestime). Rho de Spearman entre la variable et l'erreur, en €/m² et en %. Même modèle qu'en 6.2.
 
-# In[20]:
+# In[25]:
 
 
 CONTROLE = ["part_indicateurs_estimes", "part_logements_taux_impute", "part_menages_couverts"]
@@ -509,10 +601,31 @@ for v in CONTROLE:
     print(tableau.round(1).to_string())
 
 
+# In[26]:
+
+
+ordre_groupes = ["part nulle", "Q1", "Q2", "Q3", "Q4"]
+fig, axes = plt.subplots(1, 3, figsize=(13, 4), sharey=True)
+for ax, v in zip(axes, CONTROLE):
+    x = controle[v]
+    groupe = pd.Series("part nulle", index=x.index)
+    non_nul = x > 0
+    if non_nul.sum() >= 4:
+        groupe[non_nul] = pd.qcut(x[non_nul], 4, labels=["Q1", "Q2", "Q3", "Q4"], duplicates="drop").astype(str)
+    moy = erreur_pct.groupby(groupe).mean().reindex([g for g in ordre_groupes if g in set(groupe)])
+    b = ax.bar(moy.index, moy.values, color=["#bdbdbd" if g == "part nulle" else BLEU for g in moy.index])
+    ax.bar_label(b, fmt="%.1f", fontsize=8, padding=2)
+    ax.set_title(v, fontsize=10)
+axes[0].set_ylabel("erreur absolue moyenne (% du prix)")
+fig.suptitle(f"Erreur selon le contrôle qualité ({choix[0].split(' – ', 1)[1]}, {choix[1]}, {choix[2]}) : elle reste à 8-10 % du prix dans tous les groupes", y=1.0)
+fig.tight_layout()
+plt.show()
+
+
 # ### 6.4 Quelles variables survivent au Lasso ?
 # Coefficients du Lasso « modèle complet » (variables transformées et mises à l'échelle, cible en log), année jugée 2024, par type de bien. Un coefficient nul : la variable est écartée à l'alpha retenu.
 
-# In[21]:
+# In[27]:
 
 
 def coefficients(nom, annee, type_bien):
@@ -525,12 +638,65 @@ print({t: f"{int((coef[t] != 0).sum())} variables sur {len(coef)}" for t in coef
 coef.loc[(coef != 0).any(axis=1)].sort_values("maison", key=abs, ascending=False).round(4)
 
 
+# In[28]:
+
+
+sans_n1 = coef.drop("prix_n1")
+ordre = sans_n1["maison"].abs().sort_values().index
+fig, ax = plt.subplots(figsize=(8, 5))
+y = np.arange(len(ordre))
+ax.scatter(sans_n1.loc[ordre, "appartement"], y - 0.1, color=BLEU, label="appartement", zorder=3)
+ax.scatter(sans_n1.loc[ordre, "maison"], y + 0.1, color="#d98c3f", label="maison", zorder=3)
+ax.axvline(0, color="black", lw=1)
+ax.set_yticks(y, ordre)
+ax.set_xlabel("coefficient du Lasso (variables centrées-réduites, cible en log)")
+ax.set_title("Sens et poids des coefficients du Lasso, 2024 (sans prix_n1, de coefficient bien plus grand)")
+ax.legend(frameon=False)
+fig.tight_layout()
+plt.show()
+
+
+# ### 6.4 bis Les sept variables « qui ne comptaient nulle part à l'audit » (étape 1.2)
+# La feuille de route demande de regarder ce que deviennent, dans le modèle complet, les sept variables dont l'importance SHAP était sous 2 % dans les quatre modèles de l'audit du 31/10 (passage 1 du notebook d'audit) : `part_indicateurs_estimes`, `part_menages_couverts`, `taux3_stupefiants`, `taux3_cambriolages`, `taux3_vols_violents`, `taux_equip_sante`, `taux_vacance_complete`. Le tableau donne le statut de chacune dans ce notebook et son coefficient dans le Lasso 2024 quand elle y est (0 = écartée). *Le passage 2 de l'audit (avec les ménages) en compte huit, avec deux variables de familles à la place des vols violents ; la feuille de route renvoie au passage 1.*
+
+# In[29]:
+
+
+SEPT = ["part_indicateurs_estimes", "part_menages_couverts", "taux3_stupefiants", "taux3_cambriolages",
+        "taux3_vols_violents", "taux_equip_sante", "taux_vacance_complete"]
+CONTROLE = ["part_indicateurs_estimes", "part_menages_couverts"]
+
+def coef_lasso(nom, variables, type_bien, annee=2024):
+    m = ajustes[(nom, annee, type_bien)][0]
+    est = m.best_estimator_ if hasattr(m, "best_estimator_") else m
+    return pd.Series(est.regressor_.named_steps["modele"].coef_, index=variables)
+
+c_modele = {t: coef_lasso(LASSO, MODELE_COMPLET, t) for t in ["appartement", "maison"]}
+c_equip = {t: coef_lasso(LASSO_EQ, AVEC_EQUIPEMENTS, t) for t in ["appartement", "maison"]}
+lignes = []
+for v in SEPT:
+    if v in MODELE_COMPLET:
+        statut, src = "dans le modèle complet", c_modele
+    elif v in AVEC_EQUIPEMENTS:
+        statut, src = "dans la variante + équipements seulement", c_equip
+    elif v in CONTROLE:
+        statut, src = "hors modèle : contrôle qualité (ne sert pas à prévoir)", None
+    else:
+        statut, src = "hors modèle : délinquance non retenue (H3b)", None
+    lignes.append({"variable": v, "statut": statut,
+                   "coef. Lasso appartement": None if src is None else src["appartement"][v],
+                   "coef. Lasso maison": None if src is None else src["maison"][v]})
+pd.DataFrame(lignes).round(4)
+
+
+# **Lecture.** Sur les sept variables de l'audit, **deux sont de contrôle qualité** (elles ne servent pas à prévoir) et **trois de délinquance** ne sont pas dans le modèle complet (H3b ne les a pas retenues) : elles restent hors modèle, cohérent avec leur faible importance à l'audit. **`taux_vacance_complete`** est dans le modèle complet et **survit au Lasso** pour les deux types de bien (coefficient négatif, faible : sa contribution moyenne reste sous 1 %, section 6.5) ; elle apporte donc un signal de même sens que `taux_vacance`, pas un gain mesurable à elle seule. **`taux_equip_sante`** n'entre que dans la variante équipements, où le Lasso la garde (coefficient positif faible) sans que la variante n'améliore les résultats (section 5). Ces sept variables confirment le constat de l'audit : peu de poids, et aucune raison de les réintégrer.
+
 # ### 6.5 Contributions de chaque variable (équivalent SHAP) pour le modèle retenu pour le T1
 # Modèle étudié : **Elastic Net – modèle complet**, année jugée 2024, par type de bien (choix fixé avant les résultats : le plus simple parmi des régularisées à quelques €/m² les unes des autres ; le Ridge sert de contrôle en 6.6).
 # 
 # Pour un modèle linéaire, la valeur SHAP d'une variable est exactement **coefficient × (valeur centrée-réduite)** : on la calcule sans la bibliothèque `shap`, avec le même résultat. La cible est en log, une contribution de 0,05 se lit « environ +5 % sur le prix ». On donne la contribution absolue moyenne de chaque variable sur l'année jugée (son importance).
 
-# In[22]:
+# In[30]:
 
 
 MODELE_T1 = ELASTIC          # Elastic Net – modèle complet (choix fixé avant les résultats)
@@ -555,6 +721,28 @@ shap_tab = pd.DataFrame(tab).sort_values("maison", ascending=False).rename_axis(
 shap_tab.round(2)
 
 
+# In[31]:
+
+
+import matplotlib.pyplot as plt
+plt.rcParams.update({"figure.dpi": 110, "axes.spines.top": False, "axes.spines.right": False})
+BLEU, GRIS = "#1f4e79", "#8c8c8c"
+
+fig, axes = plt.subplots(2, 2, figsize=(11, 7))
+for j, tb in enumerate(TYPES_T1):
+    s = shap_tab[tb].sort_values()
+    axes[0, j].barh(s.index, s.values, color=[BLEU if v == s.max() else GRIS for v in s.values])
+    axes[0, j].set_title(f"{tb} : toutes les variables")
+    s2 = s.drop("prix_n1")
+    axes[1, j].barh(s2.index, s2.values, color=GRIS)
+    axes[1, j].set_title(f"{tb} : sans prix_n1 (zoom)")
+    for k in (0, 1):
+        axes[k, j].set_xlabel("contribution absolue moyenne (% du prix)")
+fig.suptitle("Importance des variables, Elastic Net – modèle complet, année jugée 2024", y=1.0)
+fig.tight_layout()
+plt.show()
+
+
 # **Lecture.** `prix_n1` porte presque toute la prévision : sa contribution absolue moyenne est d'environ 40 % pour les appartements et 35 % pour les maisons, contre 2 % au plus pour chaque autre variable (résidences secondaires, densité, vacance en tête ; quatre variables sont mises à zéro pour les appartements : part_sans_voiture, part_apparts, log_nb_logements, anciennete_moyenne). Autrement dit, le modèle prévoit surtout *l'écart de niveau entre les territoires*, déjà contenu dans le prix N-1, et les variables du territoire n'y changent presque rien. Ces contributions décrivent le modèle sur une année et un type de bien, sans test.
 
 # ### 6.6 Diagnostic T1 : part commune et part propre de l'erreur
@@ -567,7 +755,7 @@ shap_tab.round(2)
 # 
 # **Limite à retenir :** la part commune utilise l'erreur réelle de l'année jugée. C'est un outil de diagnostic, pas un modèle : on ne peut pas la connaître avant l'année. Le Ridge sert de contrôle, pour vérifier que la lecture ne dépend pas du modèle choisi.
 
-# In[23]:
+# In[32]:
 
 
 resultats_t1, tests_t1, parts = [], [], []
@@ -599,7 +787,7 @@ parts = pd.DataFrame(parts).set_index(["modèle", "année jugée", "type de bien
 parts.round(1)
 
 
-# In[24]:
+# In[33]:
 
 
 rt, tt = pd.DataFrame(resultats_t1), pd.DataFrame(tests_t1)
@@ -609,6 +797,70 @@ t1["comparaison"] = t1["modèle"].str.contains("contre naïve sans part commune"
 t1["modèle"] = t1["modèle"].str.extract(r"T1 – (Elastic Net|Ridge)")
 t1["règle 1.5 remplie"] = (t1["IC 95 % haut (€/m²)"] < 0) & (t1["rang-bisériale"] < 0) & (t1["gain sur la naïve (%)"] >= SEUIL_GAIN)
 t1.sort_values(["année jugée", "type de bien", "modèle", "comparaison"]).round(2).reset_index(drop=True)
+
+
+# In[34]:
+
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharey=True)
+p = parts.xs("Elastic Net", level="modèle")
+couleurs = {"Modèle": BLEU, "Modèle sans part commune": "#7fa8d1", "Naïve": "#555555", "Naïve sans part commune": "#bdbdbd"}
+colonnes = {"Modèle": "MAE modèle (€/m²)", "Modèle sans part commune": "MAE modèle sans part commune (€/m²)",
+            "Naïve": "MAE naïve (€/m²)", "Naïve sans part commune": "MAE naïve sans part commune (€/m²)"}
+for ax, tb in zip(axes, TYPES_T1):
+    sous = p.xs(tb, level="type de bien")
+    x = np.arange(len(sous.index))
+    for k, (nom, col) in enumerate(colonnes.items()):
+        b = ax.bar(x + (k - 1.5) * 0.2, sous[col], width=0.2, label=nom, color=couleurs[nom])
+        ax.bar_label(b, fmt="%.0f", fontsize=8, padding=2)
+    ax.set_xticks(x, [f"jugée {a}" for a in sous.index])
+    ax.set_title(tb)
+axes[0].set_ylabel("MAE (€/m²)")
+handles, labels = axes[0].get_legend_handles_labels()
+fig.legend(handles, labels, ncol=4, loc="lower center", frameon=False, fontsize=9)
+fig.suptitle("T1 : erreur avec et sans la part commune (Elastic Net – modèle complet)", y=1.0)
+fig.tight_layout(rect=(0, 0.07, 1, 1))
+plt.show()
+
+
+# In[35]:
+
+
+ev24 = FENETRES[2024][1]
+err24 = previsions[(ELASTIC, 2024)] - ev24[CIBLE]
+fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
+for ax, tb in zip(axes, TYPES_T1):
+    e = err24[err24.index.get_level_values("type_bien") == tb]
+    ax.hist(e, bins=50, color="#7fa8d1")
+    ax.axvline(0, color="black", lw=1)
+    ax.axvline(e.mean(), color=BLEU, lw=2, ls="--")
+    ax.set_title(f"{tb} : part commune = {e.mean():+.0f} €/m²")
+    ax.set_xlabel("erreur = prévision − prix réel (€/m²)")
+axes[0].set_ylabel("nombre de territoires")
+fig.suptitle("Erreurs de l'Elastic Net en 2024 : le décalage commun (trait pointillé) est loin de 0", y=1.0)
+fig.tight_layout()
+plt.show()
+
+
+# In[36]:
+
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
+for ax, tb in zip(axes, TYPES_T1):
+    sel = err24.index.get_level_values("type_bien") == tb
+    x, y = ev24.loc[sel, "prix_n1"], err24[sel]
+    ax.scatter(x, y, s=6, alpha=0.25, color="#7fa8d1")
+    niveau = pd.qcut(x, 10, duplicates="drop")
+    moy = pd.DataFrame({"x": x, "y": y}).groupby(niveau, observed=True).mean()
+    ax.plot(moy["x"], moy["y"], color=BLEU, lw=2, marker="o", label="moyenne par décile de prix N-1")
+    ax.axhline(0, color="black", lw=1)
+    ax.set_title(tb)
+    ax.set_xlabel("prix N-1 du territoire (€/m²)")
+axes[0].set_ylabel("erreur 2024 = prévision − prix réel (€/m²)")
+axes[0].legend(frameon=False, fontsize=8, loc="upper left")
+fig.suptitle("L'erreur 2024 selon le niveau de prix : la surestimation est-elle plus forte dans les territoires chers ?", y=1.0)
+fig.tight_layout()
+plt.show()
 
 
 # **Lecture du T1 (2024, Elastic Net ; le Ridge donne la même lecture).**
@@ -621,7 +873,7 @@ t1.sort_values(["année jugée", "type de bien", "modèle", "comparaison"]).roun
 # ## 7. Conclusion
 # **Questions :** (1.0) modèle commun ou séparé ? Une fois les blocs retenus réunis : (1.2) quel gain reste-t-il au-delà du prix N-1 et quelles variables survivent ? (1.3) l'effet propre du sous-bassin apporte-t-il quelque chose ? (1.4) un arbre, une forêt ou un boosting font-ils mieux ?
 # 
-# **0. Modèle commun ou séparé (1.0) :** séparé (section 4.1 bis). Le commun gagne de 5 à 6 €/m² pour les maisons et perd de 10 €/m² pour les appartements : l'écart est faible et va dans les deux sens. *À confirmer.*
+# **0. Modèle commun ou séparé (1.0) :** séparé (section 4.1 bis). Le commun gagne de 5 à 6 €/m² pour les maisons et perd de 10 €/m² pour les appartements : l'écart est faible et va dans les deux sens. *Choix acté avec l'équipe.*
 # 
 # **1. Contre la naïve : aucun modèle n'est retenu** (0 année réussie sur 2, tous modèles confondus : régularisées, hiérarchique, arbre, forêt, boosting). Gain sur la naïve de −1 % à −83 %. Cause, commune à H3a, H3b et H3c : les modèles apprennent sur 2020-2022 (+5 à +10 % par an) et sont jugés sur 2023 (+1 à +3 %) puis 2024 (−1 à −3 %) ; ils prolongent la hausse et surestiment les prix. L'erreur signée est positive partout (+100 à +340 €/m² selon les groupes de contrôle qualité). Le modèle « prix N-1 seul » perd déjà : le problème ne vient pas des blocs.
 # 
@@ -630,7 +882,7 @@ t1.sort_values(["année jugée", "type de bien", "modèle", "comparaison"]).roun
 # - **Où vient le gain :** pour les maisons, des variables du bloc (le Lasso sur le prix N-1 seul ne gagne rien) ; pour les appartements, en grande partie de la régularisation du prix N-1 (Lasso sur le prix N-1 seul : 6 à 9 %), ce qui confirme la remarque de H3a.
 # - **Équipements (piste H3a) :** un petit gain de plus pour les maisons (8 à 10 % contre 7 à 8 %), rien pour les appartements.
 # 
-# **3. Variables (1.2).** `prix_n1` domine très largement (sections 6.2 et 6.5 : environ 35 à 40 % de contribution moyenne contre 2 % au plus pour chaque autre variable). Le Lasso garde 8 variables sur 12 pour les appartements et les 12 pour les maisons (section 6.4). Après `prix_n1`, les plus fortes sont la densité, la part de résidences secondaires et la vacance. En 2024, seules `prix_n1` et la part de résidences secondaires aident (importance par permutation) : les autres ont un effet appris pendant la hausse qui dessert le modèle pendant le retournement.
+# **3. Variables (1.2).** `prix_n1` domine très largement (sections 6.2 et 6.5 : environ 35 à 40 % de contribution moyenne contre 2 % au plus pour chaque autre variable). Le Lasso garde 8 variables sur 12 pour les appartements et les 12 pour les maisons (section 6.4). Après `prix_n1`, les plus fortes sont la densité, la part de résidences secondaires et la vacance. En 2024, seules `prix_n1` et la part de résidences secondaires aident (importance par permutation) : les autres ont un effet appris pendant la hausse qui dessert le modèle pendant le retournement. Sur les sept variables « sans effet à l'audit » (section 6.4 bis) : deux sont des contrôles qualité et trois de la délinquance, hors modèle ; `taux_vacance_complete` survit au Lasso (coefficient faible) et `taux_equip_sante` n'est gardée que dans la variante équipements.
 # 
 # **4. Hiérarchique (1.3).** L'ICC est de 0 à 0,0008 : l'effet propre du sous-bassin n'apporte rien au-delà du prix N-1 et le modèle se comporte comme la régression simple (même MAE à 1-2 €/m² près). Un modèle (maisons 2023) n'a pas convergé, ce qui est attendu quand la variance de groupe est quasi nulle.
 # 
@@ -642,7 +894,50 @@ t1.sort_values(["année jugée", "type de bien", "modèle", "comparaison"]).roun
 # 
 # **7. Diagnostic T1 (section 6.6).** Le modèle surestime de +150 €/m² (appartements) et +174 €/m² (maisons) en 2024, un décalage commun à tous les territoires qui pèse un quart de l'erreur (MAE 197 → 148 et 141 €/m² sans part commune). Même sans elle, le modèle ne bat pas la naïve en 2024 (appartements : égalité ; maisons : −8,8 %). **Le « où » n'apporte rien de stable au-delà du prix N-1 ; le gain attendu est dans le « quand ».** À lire collectivement avec les autres chiffres.
 # 
-# **À décider avec l'équipe avant d'ouvrir 2025 :** aucun modèle n'est retenu contre la naïve, donc la règle « test 2025 pour le modèle retenu » ne désigne personne. Soit le meilleur modèle du niveau 1 (Elastic Net complet) sert de candidat, soit la naïve reste la référence du niveau 1 et le test confirme qu'aucun modèle ne la bat. À noter avant l'ouverture du test.
+# **Test 2025 (section 8) :** aucun modèle n'étant retenu contre la naïve, le candidat est l'Elastic Net complet (choix fixé avant l'ouverture, à présenter à l'équipe lors de la restitution). Il ne bat pas la naïve en 2025 (−14,7 % appartements, −9,6 % maisons ; IC entièrement au-dessus de 0) : le test ne change pas la conclusion, il la renforce.
 # 
 # **Limites :** deux années jugées, toutes deux pendant le retournement ; plusieurs variantes comparées sur les mêmes années (celle qui ressort a pu en profiter) ; l'importance des variables porte sur une année et un type de bien ; l'emploi n'est pas inclus ; plusieurs `alpha` tombent sur le bord de la grille (maisons : 1e-4 et 1e-5, proche d'une régression non pénalisée).
 # 
+
+# ## 8. Test 2025 (ouvert une seule fois pour le niveau 1)
+# **Décision prise avant l'ouverture** (ajout de ce notebook, à valider par l'équipe lors de la restitution) : aucun modèle n'est retenu contre la naïve au niveau 1, donc la règle « test pour le modèle retenu » ne désigne personne. Le candidat est le **meilleur modèle du niveau 1 selon la règle fixée en section 6.6 : Elastic Net – modèle complet** (le plus simple parmi les régularisées à égalité), jugé **contre la naïve**.
+# 
+# **Critère de lecture, identique à la règle 1.5 (fixé avant le résultat)** : le modèle réussit 2025 pour un type de bien si l'IC 95 % du bootstrap de l'écart de MAE avec la naïve est entièrement sous 0, si la rang-bisériale est négative et si le gain sur la naïve est d'au moins 3 %. Un seul candidat, une seule ouverture : aucune variante n'est regardée sur 2025.
+# 
+# **Ce que cela change par rapport aux sections précédentes** : le modèle est réajusté sur 2020-2024 (alpha et l1_ratio réglés sur les plis temporels de cette période) et prévoit 2025. Rien n'est réglé sur 2025.
+
+# In[37]:
+
+
+FENETRES_NIVEAU1 = FENETRES
+FENETRES = fenetres(table, annees_jugees=[2025])          # apprentissage 2020-2024, évaluation 2025
+assert FENETRES[2025][0]["annee"].max() == 2024 and (FENETRES[2025][1]["annee"] == 2025).all()
+NOM_2025 = lancer("Elastic Net – modèle complet (test 2025)", ElasticNet(max_iter=50_000), MODELE_COMPLET,
+                  log=True, grille=GRILLE_EN)
+FENETRES = FENETRES_NIVEAU1                                # on referme : 2025 n'est plus rouvert
+
+res_2025 = pd.DataFrame(resultats); res_2025 = res_2025[res_2025["modèle"] == NOM_2025]
+tst_2025 = pd.DataFrame(tests);     tst_2025 = tst_2025[tst_2025["modèle"] == NOM_2025]
+display(tst_2025.round(3))
+regle_decision(res_2025, tst_2025)
+
+
+# In[38]:
+
+
+# Lecture du résultat déjà obtenu (aucune nouvelle variante) : sens de l'erreur et marché 2025
+ev25 = ev25_df = table[table["annee"] == 2025]
+err25 = previsions[(NOM_2025, 2025)] - ev25[CIBLE]
+marche = (ev25[CIBLE] / ev25["prix_n1"] - 1) * 100
+tb = ev25.index.get_level_values("type_bien")
+print(pd.DataFrame({"erreur moyenne (€/m²)": err25.groupby(tb).mean(),
+                    "part de sous-estimation (%)": (err25 < 0).groupby(tb).mean() * 100,
+                    "évolution médiane du prix 2025 (%)": marche.groupby(tb).median(),
+                    "évolution moyenne du prix 2025 (%)": marche.groupby(tb).mean()}).round(1))
+
+
+# **Lecture du test 2025.** Le candidat **ne bat pas la naïve** : MAE de 163 contre 142 €/m² pour les appartements (−14,7 %) et de 113 contre 104 €/m² pour les maisons (−9,6 %). Les IC 95 % de l'écart sont entièrement au-dessus de 0 (de +6 à +43 et de +6 à +15 €/m²) : le modèle fait vraiment moins bien, pas seulement un peu moins bien. Il gagne dans 46 % des bassins seulement. Aucun type de bien ne remplit la règle 1.5 (0 année réussie sur 1).
+# 
+# - **Le marché a changé de phase, et l'erreur aussi.** Le prix évolue de +1 à +2 % en 2025 (après −1 à −3 % en 2024). Le modèle surestime encore, mais bien moins qu'en 2024 : +41 €/m² (appartements) et +37 €/m² (maisons) en moyenne, contre +150 et +174. Le biais moyen (+41 €/m²) vaut environ un quart de la MAE appartements (163 €/m²) et un tiers de celle des maisons (113 €/m²) : l'essentiel de l'erreur est propre à chaque territoire, pas un décalage commun.
+# - **Conséquence pour la question du niveau 1.** Sur trois années (2023, 2024, 2025), dont deux phases de marché différentes, le « où » (variables territoriales) n'apporte rien de stable au-delà du prix N-1 pour battre la naïve. Les variables territoriales gardent un intérêt contre « prix N-1 seul » (sections 5.2 et 6.4), mais pas contre la naïve. C'est l'argument pour ouvrir le niveau 2 (modèle pont, le « quand »).
+# - **Ce que le test ne dit pas** : il ne départage pas les autres modèles du niveau 1 (un seul candidat a été ouvert, volontairement), et une seule année est jugée.
