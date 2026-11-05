@@ -83,6 +83,13 @@ SOURCES = {
         "id": "1iixzBgxre54KhwnzFuazFpRh2mJ7fCyc",
         "nom": "base-ic-logement-2022_csv",
     },
+    # Recensement, bases IRIS Logement des millésimes 2016 à 2021 (et 2023, nouveau format) :
+    # audit des millésimes (1_audits_sources, partie 5) et EDA (1_eda_sources, C4)
+    "logement_millesimes": {
+        "type": "dossier",
+        "id": "1YK-Fz0PMYK2kk20wXUQVTT3vuJZWBlZJ",
+        "nom": "logement_millesimes",
+    },
     "bpe": {
         "type": "fichier",
         "id": "1bYiuYTkfnWON8Nv9Gc1UAnNCgs09363E",

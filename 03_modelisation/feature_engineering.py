@@ -204,7 +204,7 @@ pop_2024 = pop_2024.loc[pop_2024["annee"] == 2024, ["code_commune", "insee_pop"]
 com_pop = pd.merge(liaison, pop_2024, left_on="CODGEO_INI", right_on="code_commune")
 pop_sbv = com_pop.groupby("sous_bassin_de_vie")["insee_pop"].sum()
 
-# 3.3 Taux pour 10 000 habitants ; sous-bassin sans équipement recensé = 0 (règle de l'EDA complémentaire)
+# 3.3 Taux pour 10 000 habitants ; sous-bassin sans équipement recensé = 0 (règle de l'audit de la BPE en évolution, 1_audits_sources, partie 8)
 #     Les nombres bruts ne sont pas exportés
 nb_sbv = sbv_equip.reindex(pop_sbv.index, fill_value=0)
 taux_equip = nb_sbv.div(pop_sbv.where(pop_sbv > 0), axis=0) * 10_000
@@ -676,13 +676,13 @@ print("Bassins de vie :", table_longue["BV2022"].nunique(),
 #     annee dans l'index ET en colonne (commun.decouper fait table["annee"]).
 #     Colonnes retirées (liste écrite) : les 4 millésimes, annee_rp_menages (année du recensement utilisé),
 #     annee_faits et annee_ventes (= annee - 1),
-#     une variable par couple redondant (audit de la table, version 1 : |rho| de 0,78 à 0,88 avec la variable gardée)
-#     et les deux tailles des ménages (audit, version 2 : |rho| de 0,92 à 0,99 avec la part de personnes seules, gardée)
+#     une variable par couple redondant (audit de la table de modélisation, passage 1 : |rho| de 0,78 à 0,88 avec la variable gardée)
+#     et les deux tailles des ménages (audit de la table de modélisation, passage 2 : |rho| de 0,92 à 0,99 avec la part de personnes seules, gardée)
 NIVEAUX_INDEX = ["annee", "sous_bassin_de_vie", "type_bien"]
 COLONNES_A_RETIRER = ["millesime_lovac", "millesime_bpe", "millesime_rp", "millesime_filosofi",
                       "annee_rp_menages", "annee_faits", "annee_ventes",
-                      "part_suroccupes", "part_parking", "taux3_destructions",   # redondantes (audit, version 1)
-                      "taille_menage", "taille_moyenne_menage"]                  # redondantes (audit, version 2)
+                      "part_suroccupes", "part_parking", "taux3_destructions",   # redondantes (audit de la table de modélisation, passage 1)
+                      "taille_menage", "taille_moyenne_menage"]                  # redondantes (audit de la table de modélisation, passage 2)
  
 absentes = sorted(set(COLONNES_A_RETIRER) - set(table_longue.columns))
 assert not absentes, f"Colonnes à retirer introuvables : {absentes}"
