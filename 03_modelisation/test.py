@@ -9,6 +9,7 @@
 #   Partie 2 : P2 (test contre la naïve, bootstrap par bassin de vie)               -- Cécile
 #   Partie 3 : P4 (gabarit hiérarchique)                                            -- Christian
 #   Partie 4 : P11 (évaluation du modèle par vente, données inventées)              -- Cécile
+#   Partie 5 : P12 (gabarit Keras, données inventées)                               -- Cécile
 
 import numpy as np
 import pandas as pd
@@ -262,4 +263,86 @@ for r in res:
 print("panier :", len(panier), "biens | recopier les prix de N-1 redonne la naïve : OK")
 print("Tous les contrôles P11 passent.")
 
-print("\n=== Tous les contrôles (P1, P2, P4, P5, P11) passent. ===")
+
+# =============================================================================
+# PARTIE 5 : P12 (gabarit Keras)
+# =============================================================================
+# Ventes inventées (jamais les ventes réelles, règle de la feuille de route) : 40 sous-bassins
+# avec chacun son niveau de prix, un marché qui monte puis baisse, un effet surface et un effet maison.
+# La règle est log-linéaire et connue : un réseau qui fonctionne doit battre la naïve.
+import keras
+from gabarit_keras import ReseauKeras, prevoir_keras
+
+titre("P12 -- Données inventées")
+rng = np.random.default_rng(12)
+niveau = pd.Series(rng.lognormal(np.log(2500), 0.5, 40), index=[f"sbv_{i}" for i in range(40)])
+tendance = {2016: 1.00, 2017: 1.02, 2018: 1.08, 2019: 1.15, 2020: 1.20, 2021: 1.17}
+n = 8_000
+inv = pd.DataFrame({"annee": rng.choice([2017, 2018, 2019, 2020, 2021], n),
+                    "sous_bassin_de_vie": rng.choice(niveau.index, n),
+                    "maison": rng.integers(0, 2, n), "sbati": rng.uniform(20, 150, n).round(),
+                    "w_h": rng.uniform(1, 10, n)})
+lieu = inv["sous_bassin_de_vie"].map(niveau)
+inv["prix_n1"] = lieu * inv["annee"].sub(1).map(tendance)
+inv["prix_m2"] = (lieu * inv["annee"].map(tendance) * (1 - 0.002 * (inv["sbati"] - 60))
+                  * np.where(inv["maison"] == 1, 0.9, 1.0) * rng.lognormal(0, 0.15, n))
+inv["log_sbati"] = np.log(inv["sbati"])
+inv["log_prix_n1"] = np.log(inv["prix_n1"])
+app, ev = inv[inv["annee"] < 2021], inv[inv["annee"] == 2021]
+VARS = ["log_prix_n1", "log_sbati", "maison", "sous_bassin_de_vie", "annee"]
+RAPIDE = dict(couches=(32, 16), epochs_max=60, patience=8, batch_size=128)
+print("apprentissage :", len(app), "ventes", sorted(int(a) for a in app["annee"].unique()), "| jugée : 2021,", len(ev), "ventes")
+
+titre("P12 -- Découpage interne et transformations sans fuite (reapprendre=False)")
+m = ReseauKeras(reapprendre=False, **RAPIDE).fit(app[VARS], app["prix_m2"], sample_weight=app["w_h"])
+ent = app[app["annee"] < 2020]
+assert m.annee_arret_ == 2020, "l'early stopping doit utiliser la dernière année d'apprentissage"
+assert "annee" not in m.variables_ and "sous_bassin_de_vie" not in m.variables_, "année et sous-bassin : pas des variables numériques"
+assert np.isclose(m.moy_y_, np.log(ent["prix_m2"]).mean()), "cible standardisée sur les seules années d'entraînement"
+assert np.allclose(m.moy_X_["log_sbati"], ent["log_sbati"].mean())
+assert set(m.numeros_) == set(ent["sous_bassin_de_vie"]) and min(m.numeros_.values()) == 1, "numéro 0 réservé à l'inconnu"
+assert 1 <= m.meilleure_epoque_ <= len(m.historique_["perte_arret"]) <= RAPIDE["epochs_max"]
+print("année d'arrêt :", m.annee_arret_, "| meilleure époque :", m.meilleure_epoque_,
+      "| époques faites :", len(m.historique_["perte_arret"]))
+
+titre("P12 -- Prévisions en €/m², index conservé, sous-bassin inconnu accepté")
+p = m.predict(ev[VARS])
+assert isinstance(p, pd.Series) and p.index.equals(ev.index) and np.isfinite(p).all() and (p > 0).all()
+inconnu = ev[VARS].head(5).assign(sous_bassin_de_vie="jamais_vu")
+assert np.isfinite(m.predict(inconnu)).all(), "un sous-bassin inconnu doit recevoir le numéro 0, sans erreur"
+# Perte affichée à l'échelle naturelle : poids normalisés (sinon multipliée par le poids moyen, ~5,5 ici)
+assert m.historique_["perte_arret"][m.meilleure_epoque_ - 1] < 1.0, "perte d'arrêt trop haute : poids non normalisés ?"
+
+titre("P12 -- reapprendre=True : toute la fenêtre, même nombre d'époques")
+m2 = ReseauKeras(reapprendre=True, **RAPIDE).fit(app[VARS], app["prix_m2"], sample_weight=app["w_h"])
+assert np.isclose(m2.moy_y_, np.log(app["prix_m2"]).mean()), "après réapprentissage : transformations sur toute la fenêtre"
+assert m2.meilleure_epoque_ == m.meilleure_epoque_, "même graine : même nombre d'époques trouvé"
+
+titre("P12 -- Reproductibilité (graine fixée)")
+m3 = ReseauKeras(reapprendre=True, **RAPIDE).fit(app[VARS], app["prix_m2"], sample_weight=app["w_h"])
+ecart = (m2.predict(ev[VARS]) - m3.predict(ev[VARS])).abs().max()
+print("écart maximal entre deux entraînements identiques :", round(float(ecart), 4), "€/m²")
+assert ecart < 1.0, "deux entraînements avec la même graine doivent donner les mêmes prévisions (à 1 €/m² près)"
+
+titre("P12 -- Garde-fous")
+for X_mauvais, message in [(app[app["annee"] == 2019][VARS], "une seule année"),
+                           (app[VARS].drop(columns="annee"), "année absente"),
+                           (app[VARS].assign(log_sbati=np.nan), "case vide")]:
+    try:
+        ReseauKeras(**RAPIDE).fit(X_mauvais, app.loc[X_mauvais.index, "prix_m2"])
+        raise AssertionError(f"{message} : une erreur était attendue")
+    except ValueError as erreur:
+        print(f"{message:15s} -> refusé : {erreur}")
+from sklearn.base import clone
+assert clone(m).get_params()["couches"] == RAPIDE["couches"], "compatible scikit-learn (clone, get_params)"
+
+titre("P12 -- Le réseau apprend : il bat la naïve sur l'année jugée, sans et avec embedding")
+mae = lambda prev: np.average((ev["prix_m2"] - prev).abs(), weights=ev["w_h"])
+p_emb, _ = prevoir_keras(app, ev, VARS, "prix_m2", poids="w_h", **RAPIDE)
+p_sans, _ = prevoir_keras(app, ev, ["log_prix_n1", "log_sbati", "maison"], "prix_m2", poids="w_h",
+                          colonne_embedding=None, **RAPIDE)
+print(f"MAE naïve {mae(ev['prix_n1']):.0f} | réseau sans embedding {mae(p_sans):.0f} | avec embedding {mae(p_emb):.0f} €/m²")
+assert mae(p_emb) < mae(ev["prix_n1"]) and mae(p_sans) < mae(ev["prix_n1"]), "le réseau doit battre la naïve sur ces données"
+print("Tous les contrôles P12 passent.")
+
+print("\n=== Tous les contrôles (P1, P2, P4, P5, P11, P12) passent. ===")
