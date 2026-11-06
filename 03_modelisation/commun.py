@@ -3,6 +3,8 @@
 # =============================================================================
 # Fixe la table, le découpage, la prévision naïve, le calcul des erreurs
 # et le test de comparaison avec la naïve.
+# P11 (fin du fichier) : chargement des ventes de P10 et évaluation du modèle par vente
+# (B : biens vendus, C : panier fixe).
 # Chaque notebook de modélisation l'importe : personne ne réécrit ces fonctions.
 # Contrôles de ce fichier et des gabarits : test.py (python test.py depuis 03_modelisation).
 
@@ -170,3 +172,127 @@ def tester(nom, evaluation, prevision, tests):
                       "p-value Wilcoxon": p_value,
                       "rang-bisériale": r,
                       "bassins de vie": len(par_bassin)})
+
+
+# =============================================================================
+# P11 : ÉVALUATION DU MODÈLE PAR VENTE (H7)
+# =============================================================================
+# Le modèle par vente prévoit le prix au m² de chaque vente de l'échantillon (P10).
+# Deux évaluations (plan de modélisation, partie 6) :
+# - B, biens vendus : erreur de chaque vente, moyenne pondérée par w_h dans chaque sous-bassin,
+#   puis mesures et tests sur les sous-bassins (evaluer_ventes, tester_ventes) ;
+#   naïve = prix médian N-1 du sous-bassin de la vente.
+# - C, panier fixe : le modèle prévoit en N le prix des biens vendus en N-1 ; la médiane pondérée
+#   de ces prévisions est comparée au prix médian réel de N, comme pour les modèles agrégés
+#   (panier_fixe, evaluer_panier). C'est la comparaison à information égale avec ces modèles.
+# Les ventes ne sont gardées que dans les sous-bassins de la table de modélisation (seuil de
+# 20 ventes en N et en N-1, masque commun) : mêmes territoires que les modèles agrégés.
+
+FICHIER_VENTES = DATA_OUT / "ventes_apprentissage.parquet"
+CLES = ["annee", "sous_bassin_de_vie", "type_bien"]
+
+
+def charger_ventes_brutes(fichier=FICHIER_VENTES):
+    """Ventes de l'échantillon (P10) telles qu'enregistrées, sans rattachement (colonne anneemut).
+
+    À passer à panier_fixe (évaluation C).
+    """
+    return pd.read_parquet(fichier)
+
+
+def charger_ventes(table, fichier=FICHIER_VENTES):
+    """Ventes de l'échantillon (P10), rattachées aux sous-bassins de la table.
+
+    Chaque vente reçoit les variables de son sous-bassin pour son année (prix_n1, BV2022, variables
+    de territoire). Le prix médian de l'année N (CIBLE) et le nombre de ventes de N (n_ventes) ne
+    sont PAS ajoutés : inconnus au moment de prévoir. La cible de la vente est prix_m2.
+    """
+    ventes = charger_ventes_brutes(fichier).rename(columns={"anneemut": "annee"})
+    return rattacher_ventes(ventes, table)
+
+
+def rattacher_ventes(ventes, table):
+    """Garde les ventes des sous-bassins présents dans la table pour leur année, avec leurs variables."""
+    territoires = table.drop(columns=[CIBLE, "n_ventes", "annee"]).reset_index()
+    v = ventes.drop(columns=["BV2022"], errors="ignore").merge(
+        territoires, on=CLES, how="inner", validate="many_to_one")
+    return v.reset_index(drop=True)
+
+
+def _par_sous_bassin(ventes, prevision):
+    """Erreurs absolues du modèle et de la naïve, moyennes pondérées par w_h dans chaque sous-bassin."""
+    w = ventes["w_h"]
+    err = (ventes["prix_m2"] - prevision.loc[ventes.index]).abs()
+    err_naive = (ventes["prix_m2"] - ventes["prix_n1"]).abs()
+    sommes = pd.DataFrame({"modele": err * w, "naive": err_naive * w,
+                           "pct": err / ventes["prix_m2"] * w, "w": w,
+                           "BV2022": ventes["BV2022"]})
+    sommes[CLES] = ventes[CLES]
+    t = sommes.groupby(CLES).agg(modele=("modele", "sum"), naive=("naive", "sum"), pct=("pct", "sum"),
+                                 w=("w", "sum"), BV2022=("BV2022", "first"))
+    for c in ["modele", "naive", "pct"]:
+        t[c] = t[c] / t["w"]
+    t["pct"] *= 100
+    return t.reset_index()
+
+
+def evaluer_ventes(nom, ventes, prevision, resultats):
+    """Évaluation B : ajoute au tableau commun l'erreur du modèle par vente et son gain sur la naïve.
+
+    MAE d'un sous-bassin = moyenne de l'erreur de ses ventes, pondérée par w_h ; MAE affichée =
+    moyenne sur les sous-bassins, chacun comptant pour un, comme pour les modèles agrégés
+    (cohérent avec l'écart moyen testé par tester_ventes).
+    """
+    for type_bien, t in _par_sous_bassin(ventes, prevision).groupby("type_bien"):
+        mae, mae_naif = t["modele"].mean(), t["naive"].mean()
+        resultats.append({"modèle": f"{nom} (B, ventes)", "type de bien": type_bien,
+                          "année jugée": annee_jugee(t),
+                          "MAE (€/m²)": mae, "MAE en % du prix": t["pct"].mean(),
+                          "MAE naïve (€/m²)": mae_naif,
+                          "gain sur la naïve (%)": (1 - mae / mae_naif) * 100,
+                          "bassins où le modèle gagne (%)": (t["modele"] < t["naive"]).mean() * 100})
+
+
+def tester_ventes(nom, ventes, prevision, tests):
+    """Évaluation B : mêmes tests que tester (bootstrap par bassin de vie, Wilcoxon), sur les sous-bassins.
+
+    Réutilise tester tel quel : pour chaque sous-bassin, tester calcule
+    |CIBLE - prévision| - |CIBLE - prix_n1| ; avec CIBLE = 0, prévision = MAE du modèle et
+    prix_n1 = MAE de la naïve, cet écart est exactement MAE du modèle - MAE de la naïve.
+    """
+    t = _par_sous_bassin(ventes, prevision)
+    evaluation = pd.DataFrame({CIBLE: 0.0, "prix_n1": t["naive"], "type_bien": t["type_bien"],
+                               "annee": t["annee"], "BV2022": t["BV2022"]})
+    tester(f"{nom} (B, ventes)", evaluation, t["modele"], tests)
+
+
+def mediane_ponderee(valeurs, poids):
+    """Médiane pondérée : première valeur où le poids cumulé atteint la moitié du poids total."""
+    ordre = np.argsort(valeurs)
+    v, w = np.asarray(valeurs)[ordre], np.asarray(poids)[ordre]
+    cumul = np.cumsum(w)
+    return v[np.searchsorted(cumul, cumul[-1] / 2)]
+
+
+def panier_fixe(ventes_brutes, table, annee):
+    """Évaluation C : biens vendus en annee - 1, datés de annee et rattachés aux variables de annee.
+
+    ventes_brutes : les ventes de charger_ventes_brutes (pas celles de charger_ventes).
+    Le modèle prévoit le prix de ces biens en annee ; evaluer_panier compare la médiane des prévisions
+    au prix médian réel de annee.
+    """
+    panier = ventes_brutes[ventes_brutes["anneemut"] == annee - 1].copy()
+    panier["anneemut"] = annee
+    return rattacher_ventes(panier.rename(columns={"anneemut": "annee"}), table)
+
+
+def evaluer_panier(nom, panier, prevision, table, resultats, tests):
+    """Évaluation C : médiane pondérée des prévisions par sous-bassin, puis evaluer et tester communs."""
+    w = panier["w_h"]
+    mediane = (pd.DataFrame({"p": prevision.loc[panier.index], "w": w, **{c: panier[c] for c in CLES}})
+               .groupby(table.index.names)
+               .apply(lambda g: mediane_ponderee(g["p"], g["w"]), include_groups=False))
+    evaluation = table.loc[table.index.intersection(mediane.index)]
+    evaluer(f"{nom} (C, panier fixe)", evaluation, mediane.loc[evaluation.index], resultats)
+    tester(f"{nom} (C, panier fixe)", evaluation, mediane.loc[evaluation.index], tests)
+    
