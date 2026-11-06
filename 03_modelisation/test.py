@@ -8,6 +8,7 @@
 #   Partie 1 : P1 et P5 (masque, fenêtres, plis, tableau commun, non-régression)   -- Christian
 #   Partie 2 : P2 (test contre la naïve, bootstrap par bassin de vie)               -- Cécile
 #   Partie 3 : P4 (gabarit hiérarchique)                                            -- Christian
+#   Partie 4 : P11 (évaluation du modèle par vente, données inventées)              -- Cécile
 
 import numpy as np
 import pandas as pd
@@ -191,4 +192,74 @@ assert np.allclose(p, attendu), "pour un territoire inconnu la prévision doit �
 print(f"Territoire nouveau ({sbv_retire}) : prévision = effets fixes seuls, OK")
 print("Tous les contrôles P4 passent.")
 
-print("\n=== Tous les contrôles (P1, P2, P4, P5) passent. ===")
+
+# =============================================================================
+# PARTIE 4 : P11 (évaluation du modèle par vente)
+# =============================================================================
+# Ventes inventées : 5 par ligne de la table, prix et poids au hasard, plus 3 ventes
+# dans un sous-bassin absent de la table. On vérifie le rattachement et les calculs.
+from commun import (rattacher_ventes, evaluer_ventes, tester_ventes, mediane_ponderee,
+                    panier_fixe, evaluer_panier)
+
+titre("P11 -- Rattachement des ventes aux sous-bassins de la table")
+rng = np.random.default_rng(0)
+cles = table.index.to_frame(index=False)
+brutes = cles.loc[cles.index.repeat(5)].reset_index(drop=True).rename(columns={"annee": "anneemut"})
+brutes["prix_m2"] = rng.uniform(1000, 5000, len(brutes))
+brutes["w_h"] = rng.uniform(1, 20, len(brutes))
+brutes["idmutation"] = range(len(brutes))
+extra = brutes.iloc[:3].copy()
+extra["sous_bassin_de_vie"] = "inconnu"
+brutes = pd.concat([brutes, extra], ignore_index=True)
+ventes = rattacher_ventes(brutes.rename(columns={"anneemut": "annee"}), table)
+assert len(ventes) == len(brutes) - 3, "les ventes hors table doivent être retirées, les autres gardées"
+assert CIBLE not in ventes and "n_ventes" not in ventes, "prix médian et ventes de N : inconnus au moment de prévoir"
+assert "prix_n1" in ventes and "BV2022" in ventes
+print("ventes inventées :", len(brutes), "| gardées :", len(ventes))
+
+titre("P11 -- Évaluation B (biens vendus)")
+ev = ventes[ventes["annee"] == ANNEES_JUGEES[-1]]
+res, tst = [], []
+evaluer_ventes("naïve", ev, ev["prix_n1"], res)
+assert all(abs(r["gain sur la naïve (%)"]) < 1e-9 for r in res), "prévoir la naïve doit donner un gain nul"
+p = ev["prix_m2"] * rng.uniform(0.9, 1.1, len(ev))
+res, tst = [], []
+evaluer_ventes("bruitée", ev, p, res)
+tester_ventes("bruitée", ev, p, tst)
+for type_bien, e in ev.groupby("type_bien"):
+    sbv, w = e["sous_bassin_de_vie"], e["w_h"]
+    m = ((e["prix_m2"] - p.loc[e.index]).abs() * w).groupby(sbv).sum() / w.groupby(sbv).sum()
+    n = ((e["prix_m2"] - e["prix_n1"]).abs() * w).groupby(sbv).sum() / w.groupby(sbv).sum()
+    r = next(x for x in tst if x["type de bien"] == type_bien)
+    assert np.isclose(r["écart de MAE avec la naïve (€/m²)"], (m - n).mean()), "écart testé faux"
+    assert np.isclose(next(x for x in res if x["type de bien"] == type_bien)["MAE (€/m²)"], m.mean())
+print(pd.DataFrame(tst).round(3).to_string(index=False))
+
+titre("P11 -- Évaluation C (panier fixe)")
+assert mediane_ponderee([1, 2, 3], [1, 1, 1]) == 2 and mediane_ponderee([1, 2, 3], [1, 1, 10]) == 3
+panier = panier_fixe(brutes, table, ANNEES_JUGEES[-1])
+assert len(panier) > 0 and (panier["annee"] == ANNEES_JUGEES[-1]).all()
+vrai = table[CIBLE].reindex(pd.MultiIndex.from_frame(panier[table.index.names])).to_numpy()
+res, tst = [], []
+evaluer_panier("parfait", panier, pd.Series(vrai, index=panier.index), table, res, tst)
+assert all(r["MAE (€/m²)"] < 1e-9 for r in res), "prévoir le prix réel doit donner une erreur nulle"
+print("panier :", len(panier), "biens | erreur nulle quand la prévision est le prix réel : OK")
+
+titre("P11 -- Critère de la feuille de route : recopier les prix de N-1 redonne la naïve (C)")
+# Ventes inventées dont le prix vaut le prix médian de leur territoire et de leur année :
+# la médiane pondérée des ventes de N-1 est alors exactement le prix N-1 de la table (prix_n1 de N).
+copies = cles.rename(columns={"annee": "anneemut"})
+copies["prix_m2"] = table[CIBLE].to_numpy()
+copies["w_h"] = rng.uniform(1, 20, len(copies))
+copies = copies.loc[copies.index.repeat(3)].reset_index(drop=True)
+copies["idmutation"] = range(len(copies))
+panier = panier_fixe(copies, table, ANNEES_JUGEES[-1])
+res, tst = [], []
+evaluer_panier("recopie de N-1", panier, panier["prix_m2"], table, res, tst)
+for r in res:
+    assert np.isclose(r["MAE (€/m²)"], r["MAE naïve (€/m²)"]), "recopier les prix de N-1 doit redonner la naïve"
+    assert abs(r["gain sur la naïve (%)"]) < 1e-9
+print("panier :", len(panier), "biens | recopier les prix de N-1 redonne la naïve : OK")
+print("Tous les contrôles P11 passent.")
+
+print("\n=== Tous les contrôles (P1, P2, P4, P5, P11) passent. ===")

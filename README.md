@@ -120,7 +120,8 @@ Chaque notebook de modélisation importe `03_modelisation/commun.py`, qui fixe p
 - la table et le masque des lignes communes (`charger_table`) ;
 - le découpage temporel (`decouper`, `fenetres`, `plis_temporels`) ;
 - la prévision naïve (prix N = prix N-1) ;
-- le tableau commun des erreurs (`evaluer`) et le test contre la naïve (`tester` : bootstrap par bassin de vie et Wilcoxon apparié).
+- le tableau commun des erreurs (`evaluer`) et le test contre la naïve (`tester` : bootstrap par bassin de vie et Wilcoxon apparié) ;
+- l'évaluation du modèle par vente (P11) : `charger_ventes`, `evaluer_ventes` et `tester_ventes` (biens vendus), `panier_fixe` et `evaluer_panier` (panier fixe, comparaison avec les modèles agrégés).
 
 Contrôles de `commun.py` et des gabarits :
 
@@ -166,6 +167,8 @@ Tous dans `data/processed/`, au format Parquet (les codes géographiques restent
 | 1 | `communes_superficie_2026.parquet` | une commune 2026 (Paris, Lyon, Marseille par arrondissement) |
 | 2 | `dvf_plus_residentiel.parquet` | une vente |
 | 3 | `dvf_plus_echantillon_apprentissage.parquet` | une vente de l'échantillon |
+| 3 bis | `ventes_apprentissage.parquet` | une vente de l'échantillon, prête pour le modèle par vente (H7) |
+| 3 bis | `ventes_test_2025.parquet`, `ids_ventes_test_2025.csv` | une vente de 2025, réservée au test final du niveau 2 |
 | 4 | `cible_commune_{mois,trimestre,annee}.parquet` | une commune × une période |
 | 4 | `cible_bv_{mois,trimestre,annee}.parquet` | un bassin de vie × une période |
 | 4 | `cible_sbv_{mois,trimestre,annee}.parquet` | un sous-bassin de vie × une période |
@@ -222,6 +225,17 @@ Vérification au premier chargement : `len(df)` doit afficher `907306`.
 import numpy as np
 np.average(df["libtypbien"] == "UNE MAISON", weights=df["w_h"])
 ```
+
+## Ventes pour le modèle par vente (bloc 3 bis)
+
+Deux fichiers pour le modèle par vente (H7, niveau 2), produits par le bloc 3 bis de la préparation :
+
+- `ventes_apprentissage.parquet` : **904 949 ventes** (2014-2024), l'échantillon du bloc 3 après les règles d'exclusion du bloc 4 (valeur foncière renseignée et positive, prix entre 50 et 50 000 €/m²). 2 357 ventes retirées (0,26 %, entre 0,21 et 0,37 % selon l'année) ; poids `w_h` inchangés.
+- `ventes_test_2025.parquet` : **80 673 ventes** de 2025, tirées une seule fois (même règle, graine 2025). **Ne pas l'ouvrir avant le test final du niveau 2.**
+
+Colonnes : identifiants (`idmutation`, `coddep`, `code_commune`, `BV2022`, `sous_bassin_de_vie`, jamais des variables du modèle), date (`anneemut`, `moismut`), bien (`type_bien`, `sbati`, `sterr`, `nblocdep`, `nb_pieces`, `geompar_x`, `geompar_y`), cible `prix_m2` et poids `w_h`. `valeurfonc` n'est pas gardée : avec `sbati`, elle redonne la cible.
+
+Le prix N-1 du territoire, les variables « où » et le seuil de 20 ventes sont ajoutés au moment de la modélisation, par `commun.charger_ventes`.
 
 ## Livrables
 
