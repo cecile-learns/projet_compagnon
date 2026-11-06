@@ -395,6 +395,74 @@ print("Bloc 3 - échantillon :", len(ech),
       "| strates en écart :", (verif["tire"] != verif["n_h"]).sum(),
       "| idmutation uniques :", ech["idmutation"].is_unique)
 
+# =============================================================================
+# BLOC 3 BIS - VENTES POUR LE MODÈLE PAR VENTE (H7) : APPRENTISSAGE ET TEST 2025
+# =============================================================================
+# Apprentissage : l'échantillon du bloc 3, après les règles d'exclusion du bloc 4
+# (valeur foncière renseignée, prix entre 50 et 50 000 €/m2). Retrait après tirage :
+# 0,3 % des ventes, poids w_h inchangés (limite négligeable, déclarée).
+# Test : 2025 tiré une seule fois, même règle (10 % par département, au moins 300),
+# graine différente. À ne pas utiliser avant le test final du niveau 2.
+# Chaque vente est rattachée à sa commune 2026, son bassin de vie et son sous-bassin.
+
+liaison = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet")
+# valeurfonc n'est pas gardée : avec sbati, elle redonne exactement la cible prix_m2 (fuite)
+COLONNES_VENTES = ["idmutation", "anneemut", "moismut", "coddep", "code_commune", "BV2022",
+                   "sous_bassin_de_vie", "type_bien", "prix_m2", "sbati", "sterr",
+                   "nblocdep", "nb_pieces", "geompar_x", "geompar_y", "w_h"]
+
+
+def preparer_ventes(d):
+    """Règles d'exclusion, nombre de pièces, type de bien et rattachement territorial."""
+    d = d.copy()
+    d["prix_m2"] = d["valeurfonc"] / d["sbati"]
+    d = d[d["valeurfonc"].notna() & (d["valeurfonc"] > 0) & d["prix_m2"].between(50, 50000)].copy()
+    d["type_bien"] = d["libtypbien"].map({"UNE MAISON": "maison", "UN APPARTEMENT": "appartement"})
+    # Une seule de ces colonnes vaut 1 : sa position donne le nombre de pièces (5 = 5 ou plus)
+    pieces = (d[[f"nbmai{i}pp" for i in range(1, 6)]].to_numpy()
+              + d[[f"nbapt{i}pp" for i in range(1, 6)]].to_numpy())
+    d["nb_pieces"] = pieces.argmax(axis=1) + 1
+    d = d.merge(liaison[["CODGEO_INI", "CODGEO_2026", "BV2022", "sous_bassin_de_vie"]],
+                left_on="l_codinsee", right_on="CODGEO_INI", how="left", validate="many_to_one")
+    arrondissement = d["l_codinsee"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
+    d["code_commune"] = d["CODGEO_2026"].where(~arrondissement, d["l_codinsee"])
+    return d[COLONNES_VENTES]
+
+
+# --- Apprentissage (2014-2024) ---
+ventes_app = preparer_ventes(ech)
+ventes_app.to_parquet(DATA_OUT / "ventes_apprentissage.parquet", index=False)
+
+# --- Test 2025 : tirage unique ---
+test = strates[strates["anneemut"] == 2025].copy()
+test["n_h"] = np.minimum(test["N_h"], np.maximum(plancher, np.round(test["N_h"] * taux))).astype(int)
+test["w_h"] = test["N_h"] / test["n_h"]
+rng_test = np.random.default_rng(2025)   # graine propre au test, tirage reproductible
+morceaux = []
+for dep in sorted(test["coddep"].unique()):
+    d = pd.read_parquet(fichier_pop, filters=[("coddep", "==", dep), ("anneemut", "==", 2025)])
+    d = d.merge(test[["coddep", "anneemut", "n_h", "w_h"]], on=["coddep", "anneemut"])
+    d["alea"] = rng_test.random(len(d))
+    d["rang"] = d["alea"].rank(method="first")
+    morceaux.append(d[d["rang"] <= d["n_h"]].drop(columns=["alea", "rang", "n_h"]))
+ventes_test = preparer_ventes(pd.concat(morceaux, ignore_index=True))
+ventes_test.to_parquet(DATA_OUT / "ventes_test_2025.parquet", index=False)
+ventes_test[["idmutation"]].to_csv(DATA_OUT / "ids_ventes_test_2025.csv", index=False)
+
+# --- Contrôles ---
+for nom, v in [("apprentissage", ventes_app), ("test 2025", ventes_test)]:
+    print(f"Bloc 3 bis - {nom} : {len(v)} ventes | sans sous-bassin : {v['sous_bassin_de_vie'].isna().sum()}"
+          f" | idmutation uniques : {v['idmutation'].is_unique} | années : {sorted(v['anneemut'].unique())}")
+print("ventes retirées par les règles d'exclusion (apprentissage) :", len(ech) - len(ventes_app))
+avant = ech.groupby("anneemut").size().rename("avant")
+apres = ventes_app.groupby("anneemut").size().rename("après")
+bilan_ventes = pd.concat([avant, apres], axis=1)
+bilan_ventes["retirées"] = bilan_ventes["avant"] - bilan_ventes["après"]
+bilan_ventes["% retiré"] = (bilan_ventes["retirées"] / bilan_ventes["avant"] * 100).round(2)
+print(bilan_ventes.to_string())
+assert "valeurfonc" not in ventes_app.columns and "valeurfonc" not in ventes_test.columns, "fuite : valeurfonc"
+print("pièces :", ventes_app["nb_pieces"].value_counts().sort_index().to_dict())
+
 
 # =============================================================================
 # BLOC 4 - TABLES CIBLES : PRIX MÉDIAN AU M2
@@ -860,10 +928,10 @@ print("Bloc 11 - mois :", len(taux_mois),
 # =============================================================================
 # BLOC 12 - ÉQUIPEMENTS PAR COMMUNE (BPE 2025)
 # =============================================================================
-# Source : BPE 2025, une ligne = un équipement (audit : 1_audits_sources, partie 8).
+# Source : BPE 2025, une ligne = un équipement (audit dans l'EDA complémentaire).
 # Six domaines : services, commerces, santé, transports, sports, tourisme
 # (enseignement exclu). Seuls les types présents dans la BPE en évolution sont
-# comptés : nombres comparables à ceux de la BPE en évolution (97,4 % des bassins
+# comptés : nombres comparables à ceux de l'EDA complémentaire (97,4 % des bassins
 # à moins de 1 % d'écart). Une ligne = une commune (géographie 2026, arrondissements
 # séparés). S'additionne à n'importe quelle maille ; commune absente = 0 équipement.
 
