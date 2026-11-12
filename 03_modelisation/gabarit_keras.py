@@ -22,7 +22,17 @@
 #   calculées sur les seules lignes d'apprentissage du réseau ; sous-bassin inconnu -> numéro 0 ;
 # - poids (w_h) normalisés par leur moyenne : la perte de Keras reste à l'échelle naturelle
 #   (sinon elle est multipliée par le poids moyen) ; un modèle se juge sur NOS mesures, pas sur cette perte ;
-# - pas de GridSearchCV (temps de calcul) : 2 ou 3 configurations comparées sur les années jugées.
+# - pas de GridSearchCV dans le gabarit (temps de calcul) : les réglages sont choisis par
+#   optimisation_keras.py sur une année de validation qui n'est jamais une année jugée (2022), et lus
+#   par H7 dans meilleurs_reglages_keras.json ; jamais choisis sur les années jugées (fuite).
+#
+# Ajouts du 11/11/2026 (résultats de optimisation_keras.py), valeurs par défaut sans effet :
+# - reference : nom d'une colonne de X qui contient le LOG d'un prix de référence (ex. 'log_prix_n1').
+#   Le réseau apprend alors le rapport prix / prix de référence (en log, comme la cible) et rend
+#   prix de référence x rapport prévu, toujours en €/m². Le niveau de chaque territoire vient du prix
+#   de référence : le réseau n'apprend qu'un écart, ce qui évite de ramener les prix élevés vers le
+#   milieu (appartements les plus chers). La colonne reste aussi une variable du réseau.
+# - perte : erreur minimisée pendant l'apprentissage, 'mse' (défaut), 'mae' ou 'huber'.
 #
 # Vérification : partie 5 de test.py (données inventées, jamais les ventes réelles).
 
@@ -46,13 +56,17 @@ class ReseauKeras(RegressorMixin, BaseEstimator):
         sample_weight : poids des lignes (w_h), facultatif.
     predict(X) -> pd.Series en €/m², même index que X.
 
+    reference : None, ou colonne de X contenant le log d'un prix de référence (ex. 'log_prix_n1') ;
+        le réseau apprend alors prix / exp(reference) et predict rend exp(reference) x rapport prévu.
+    perte : 'mse' (défaut), 'mae' ou 'huber'.
+
     Attributs après fit : meilleure_epoque_, historique_ (pertes par époque, échelle normalisée),
     variables_ (colonnes numériques), annee_arret_ (année utilisée pour l'early stopping).
     """
 
     def __init__(self, colonne_embedding="sous_bassin_de_vie", dim_embedding=8, couches=(128, 64, 32),
                  dropout=0.1, learning_rate=1e-3, batch_size=512, epochs_max=300, patience=15,
-                 cible_log=True, reapprendre=True, graine=GRAINE, verbose=0):
+                 cible_log=True, reapprendre=True, graine=GRAINE, verbose=0, reference=None, perte="mse"):
         self.colonne_embedding = colonne_embedding
         self.dim_embedding = dim_embedding
         self.couches = couches
@@ -65,6 +79,8 @@ class ReseauKeras(RegressorMixin, BaseEstimator):
         self.reapprendre = reapprendre
         self.graine = graine
         self.verbose = verbose
+        self.reference = reference
+        self.perte = perte
 
     # ------------------------------------------------------------------ outils
     @staticmethod
@@ -75,6 +91,13 @@ class ReseauKeras(RegressorMixin, BaseEstimator):
         if "annee" in (X.index.names or []):
             return X.index.get_level_values("annee").to_numpy()
         raise ValueError("ReseauKeras : l'année est introuvable (colonne ou niveau d'index 'annee').")
+
+    def _prix_reference(self, X):
+        """Prix de référence en €/m² : exp de la colonne reference (qui contient un log)."""
+        if self.reference not in X.columns:
+            raise ValueError(f"ReseauKeras : colonne de référence {self.reference!r} absente de X "
+                             "(elle doit faire partie des variables).")
+        return np.exp(X[self.reference].to_numpy(dtype=float))
 
     def _ajuster_transformations(self, X, y):
         """Apprend, sur les lignes reçues seulement : moyennes et écarts-types, table des sous-bassins."""
@@ -129,7 +152,8 @@ class ReseauKeras(RegressorMixin, BaseEstimator):
                 x = layers.Dropout(self.dropout)(x)
         sortie = layers.Dense(1, activation="linear", name="prix")(x)
         modele = Model(entrees, sortie)
-        modele.compile(optimizer=keras.optimizers.Adam(learning_rate=self.learning_rate), loss="mse")
+        perte = keras.losses.Huber() if self.perte == "huber" else self.perte
+        modele.compile(optimizer=keras.optimizers.Adam(learning_rate=self.learning_rate), loss=perte)
         return modele
 
     # ------------------------------------------------------------------ fit / predict
@@ -139,7 +163,11 @@ class ReseauKeras(RegressorMixin, BaseEstimator):
         if len(distinctes) < 2:
             raise ValueError("ReseauKeras : au moins deux années sont nécessaires "
                              "(la dernière sert à l'early stopping).")
+        if self.perte not in ("mse", "mae", "huber"):
+            raise ValueError(f"ReseauKeras : perte inconnue {self.perte!r} ('mse', 'mae' ou 'huber').")
         y = np.asarray(y, dtype=float)
+        if self.reference is not None:                 # le réseau apprend le rapport prix / référence
+            y = y / self._prix_reference(X)
         w = np.ones(len(X)) if sample_weight is None else np.asarray(sample_weight, dtype=float)
 
         # 1. Entraînement sur les années avant la dernière, arrêt réglé sur la dernière
@@ -171,6 +199,8 @@ class ReseauKeras(RegressorMixin, BaseEstimator):
         p = p.astype(float) * self.ect_y_ + self.moy_y_
         if self.cible_log:
             p = np.exp(p)
+        if self.reference is not None:                 # rapport prévu -> prix en €/m²
+            p = p * self._prix_reference(X)
         return pd.Series(p, index=X.index)
 
 
