@@ -1,0 +1,22 @@
+# Thème commun aux quatre pages : page blanche, colonne de gauche bleu foncé, accent ambre
+[theme]
+base = "light"
+primaryColor = "#E9A23B"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F2F6F7"
+textColor = "#00386B"
+headingFont = "DM Serif Display:https://fonts.googleapis.com/css2?family=DM+Serif+Display&display=swap"
+baseFontSize = 16
+headingFontSizes = ["3.0rem", "1.75rem", "1.25rem"]
+baseRadius = "0.75rem"
+borderColor = "#D5DEE8"
+chartCategoricalColors = ["#00386B", "#E9A23B", "#4F9DA6", "#B5523B"]
+dataframeHeaderBackgroundColor = "#E8EEF5"
+
+# Colonne de gauche (menu des pages en haut, filtres de la page en dessous)
+[theme.sidebar]
+backgroundColor = "#00386B"
+secondaryBackgroundColor = "#0B4A82"
+textColor = "#E6F0F2"
+primaryColor = "#E9A23B"
+font = "Nunito:https://fonts.googleapis.com/css2?family=Nunito:wght@600;700&display=swap"
