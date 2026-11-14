@@ -1,10 +1,14 @@
 # =============================================================================
-# 01 - PRÉPARATION DES DONNÉES - projet Compagnon Immobilier
+# 01 - PRÉPARATION DES SOURCES - projet Compagnon Immobilier
 # =============================================================================
 # Version courte de preparation.ipynb (explications détaillées dans le notebook).
+# Douze blocs, chacun lisible et lançable seul : il lit ses fichiers d'entrée dans
+# data/raw/ (ou ceux d'un bloc précédent dans data/processed/) et écrit les siens.
 # À lancer depuis la racine du projet, après 00_telechargement :
-#   python 01_preparation/preparation.py
-# Entrées : data/raw/  |  Sorties : data/processed/
+#   python 01_preparation/preparation.py              tous les blocs, dans l'ordre
+#   python 01_preparation/preparation.py 5 6 9        seulement ces blocs
+#   python 01_preparation/preparation.py liste        liste les blocs
+# Un bloc qui a besoin du résultat d'un autre le dit et s'arrête.
 
 import re
 import shutil
@@ -21,8 +25,27 @@ import pyarrow.parquet as pq
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import DATA_RAW, DATA_OUT
 
-DATA_OUT.mkdir(parents=True, exist_ok=True)
+# --- Éléments partagés par plusieurs blocs ---
+FICHIER_POP = DATA_OUT / "dvf_plus_residentiel.parquet"   # DVF+ filtré (bloc 2)
+TAUX_ECH, PLANCHER = 0.10, 300    # tirage : 10 % par département x année, au moins 300 (blocs 3 et 3 bis)
 
+
+def exiger(fichier, bloc):
+    """Arrête le bloc avec un message clair si le fichier d'un bloc précédent manque."""
+    if not Path(fichier).exists():
+        sys.exit(f"{Path(fichier).name} introuvable : lancer d'abord le bloc {bloc} "
+                 f"(python 01_preparation/preparation.py {bloc})")
+
+
+def compter_strates():
+    """Nombre de ventes N_h par strate (département x année) de la population filtrée."""
+    return (pd.read_parquet(FICHIER_POP, columns=["coddep", "anneemut"])
+              .value_counts().rename("N_h").reset_index())
+
+
+def ratio(numerateur, denominateur):
+    """Part en % ; vide si le dénominateur vaut 0 (blocs 7 et 9)."""
+    return (numerateur / denominateur.replace(0, np.nan)) * 100
 
 # =============================================================================
 # BLOC 1 - TABLE DE LIAISON COMMUNE -> BASSIN DE VIE 2022
@@ -32,244 +55,244 @@ DATA_OUT.mkdir(parents=True, exist_ok=True)
 # Toute source s'y rattache par son code commune, sur CODGEO_INI.
 
 # --- Lecture des fichiers Insee (titres sur 5 lignes, codes en texte) ---
-passage = pd.read_excel(DATA_RAW / "table_passage_geo2003_geo2026.xlsx",
-                        sheet_name="Table de passage", skiprows=5, dtype=str)
-fichier_bv = DATA_RAW / "BV2022_2022_2026.xlsx"
-compo = pd.read_excel(fichier_bv, sheet_name="Composition_communale", skiprows=5, dtype=str)
-bassins = pd.read_excel(fichier_bv, sheet_name="BV2022", skiprows=5, dtype=str)
+def bloc_1():
+    passage = pd.read_excel(DATA_RAW / "table_passage_geo2003_geo2026.xlsx",
+                            sheet_name="Table de passage", skiprows=5, dtype=str)
+    fichier_bv = DATA_RAW / "BV2022_2022_2026.xlsx"
+    compo = pd.read_excel(fichier_bv, sheet_name="Composition_communale", skiprows=5, dtype=str)
+    bassins = pd.read_excel(fichier_bv, sheet_name="BV2022", skiprows=5, dtype=str)
 
-# --- Communes scindées : filtrage sur la table de passage initiale ---
-scindee = passage["CODGEO_INI"].duplicated(keep=False)
-identite = passage["CODGEO_INI"] == passage["CODGEO_2026"]
-cas_52427 = (passage["CODGEO_INI"] == "52427") & (
-    passage["CODGEO_2026"] == "52331"
-)
-passage = passage[~scindee | identite | cas_52427]
+    # --- Communes scindées : filtrage sur la table de passage initiale ---
+    scindee = passage["CODGEO_INI"].duplicated(keep=False)
+    identite = passage["CODGEO_INI"] == passage["CODGEO_2026"]
+    cas_52427 = (passage["CODGEO_INI"] == "52427") & (
+        passage["CODGEO_2026"] == "52331"
+    )
+    passage = passage[~scindee | identite | cas_52427]
 
-# --- Ajout des arrondissements, rattachés au code de leur ville ---
-villes = {
-    "75056": ("Paris", range(75101, 75121)),  # 75101 à 75120
-    "69123": ("Lyon", range(69381, 69390)),  # 69381 à 69389
-    "13055": ("Marseille", range(13201, 13217)),  # 13201 à 13216
-}
+    # --- Ajout des arrondissements, rattachés au code de leur ville ---
+    villes = {
+        "75056": ("Paris", range(75101, 75121)),  # 75101 à 75120
+        "69123": ("Lyon", range(69381, 69390)),  # 69381 à 69389
+        "13055": ("Marseille", range(13201, 13217)),  # 13201 à 13216
+    }
 
-lignes = []
-for code_ville, (nom, arrondissements) in villes.items():
-    for code_arr in arrondissements:
-        lignes.append({
-            "CODGEO_INI": str(code_arr),
-            "CODGEO_2026": code_ville,
-            "LIBGEO_2026": nom,
-        })
+    lignes = []
+    for code_ville, (nom, arrondissements) in villes.items():
+        for code_arr in arrondissements:
+            lignes.append({
+                "CODGEO_INI": str(code_arr),
+                "CODGEO_2026": code_ville,
+                "LIBGEO_2026": nom,
+            })
 
-df_arrondissements = pd.DataFrame(lignes)
+    df_arrondissements = pd.DataFrame(lignes)
 
-# Sécurité : on évite les doublons si les arrondissements existent déjà dans passage
-passage = passage[~passage["CODGEO_INI"].isin(df_arrondissements["CODGEO_INI"])]
-passage = pd.concat([passage, df_arrondissements], ignore_index=True)
+    # Sécurité : on évite les doublons si les arrondissements existent déjà dans passage
+    passage = passage[~passage["CODGEO_INI"].isin(df_arrondissements["CODGEO_INI"])]
+    passage = pd.concat([passage, df_arrondissements], ignore_index=True)
 
-# --- Ajout du bassin de vie et de sa description ---
-liaison = passage.merge(compo[["CODGEO", "BV2022"]], left_on="CODGEO_2026", right_on="CODGEO",
-                        how="left", validate="many_to_one").drop(columns="CODGEO")
-liaison = liaison.merge(bassins[["BV2022", "LIBBV2022", "TYPE_BV2022"]], on="BV2022",
-                        how="left", validate="many_to_one")
+    # --- Ajout du bassin de vie et de sa description ---
+    liaison = passage.merge(compo[["CODGEO", "BV2022"]], left_on="CODGEO_2026", right_on="CODGEO",
+                            how="left", validate="many_to_one").drop(columns="CODGEO")
+    liaison = liaison.merge(bassins[["BV2022", "LIBBV2022", "TYPE_BV2022"]], on="BV2022",
+                            how="left", validate="many_to_one")
 
-# --- Contrôles et enregistrement ---
-print("Bloc 1 - lignes :", len(liaison),
-      "| un code = une ligne :", liaison["CODGEO_INI"].is_unique,
-      "| codes sans bassin :", liaison["BV2022"].isna().sum())
-liaison.to_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", index=False)
+    # --- Contrôles et enregistrement ---
+    print("Bloc 1 - lignes :", len(liaison),
+          "| un code = une ligne :", liaison["CODGEO_INI"].is_unique,
+          "| codes sans bassin :", liaison["BV2022"].isna().sum())
+    liaison.to_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", index=False)
 
 
-# --- Scindage des grands bassins de vie (sous-bassins) ---
-# Bassins de 100 000 habitants ou plus découpés selon la grille de densité des
-# communes : _1 (grands centres et centres intermédiaires), _2 (ceintures urbaines
-# et petites villes), _3 (rural). Bassins plus petits : code du bassin inchangé.
-# Arrondissements de Paris, Lyon, Marseille : chacun forme son propre sous-bassin.
-# Sortie : liaison_bv_scindes.parquet = table de liaison + colonne sous_bassin_de_vie.
+    # --- Scindage des grands bassins de vie (sous-bassins) ---
+    # Bassins de 100 000 habitants ou plus découpés selon la grille de densité des
+    # communes : _1 (grands centres et centres intermédiaires), _2 (ceintures urbaines
+    # et petites villes), _3 (rural). Bassins plus petits : code du bassin inchangé.
+    # Arrondissements de Paris, Lyon, Marseille : chacun forme son propre sous-bassin.
+    # Sortie : liaison_bv_scindes.parquet = table de liaison + colonne sous_bassin_de_vie.
 
-#1. Chargement et préparation des communes 2026
-df_communes = pd.read_csv(DATA_RAW / "communes-france-2026.csv",
-    dtype={'code_insee': str, 'code_bassin_de_vie': str, 'grille_densite': int})
+    #1. Chargement et préparation des communes 2026
+    df_communes = pd.read_csv(DATA_RAW / "communes-france-2026.csv",
+        dtype={'code_insee': str, 'code_bassin_de_vie': str, 'grille_densite': int})
 
-# Harmonisation du code INSEE sur 5 caractères
-df_communes['code_insee'] = df_communes['code_insee'].str.zfill(5)
+    # Harmonisation du code INSEE sur 5 caractères
+    df_communes['code_insee'] = df_communes['code_insee'].str.zfill(5)
 
-# Calcul de la population totale par bassin de vie
-df_communes['pop_bv_totale'] = df_communes.groupby('code_bassin_de_vie')['population'].transform('sum')
+    # Calcul de la population totale par bassin de vie
+    df_communes['pop_bv_totale'] = df_communes.groupby('code_bassin_de_vie')['population'].transform('sum')
 
-# Attribution vectorisée des sous-bassins
-conditions = [
-    df_communes['pop_bv_totale'] < 100000,
-    df_communes['grille_densite'].isin([1, 2]),
-    df_communes['grille_densite'].isin([3, 4]),
-]
-choix = [
-    df_communes['code_bassin_de_vie'],
-    df_communes['code_bassin_de_vie'] + '_1',
-    df_communes['code_bassin_de_vie'] + '_2',
-]
+    # Attribution vectorisée des sous-bassins
+    conditions = [
+        df_communes['pop_bv_totale'] < 100000,
+        df_communes['grille_densite'].isin([1, 2]),
+        df_communes['grille_densite'].isin([3, 4]),
+    ]
+    choix = [
+        df_communes['code_bassin_de_vie'],
+        df_communes['code_bassin_de_vie'] + '_1',
+        df_communes['code_bassin_de_vie'] + '_2',
+    ]
 
-df_communes['sous_bassin_de_vie'] = np.select(
-    conditions, choix, default=df_communes['code_bassin_de_vie'] + '_3'
-)
+    df_communes['sous_bassin_de_vie'] = np.select(
+        conditions, choix, default=df_communes['code_bassin_de_vie'] + '_3'
+    )
 
-# 2. Traitement des arrondissements de Paris, Lyon, Marseille
-pop_arrondissements = {
-    # Paris (75101 à 75120)
-    '75101': 15919,
-    '75102': 21130,
-    '75103': 34120,
-    '75104': 28088,
-    '75105': 57380,
-    '75106': 39625,
-    '75107': 47970,
-    '75108': 35190,
-    '75109': 59250,
-    '75110': 83450,
-    '75111': 142500,
-    '75112': 140100,
-    '75113': 177800,
-    '75114': 133400,
-    '75115': 227700,
-    '75116': 162200,
-    '75117': 163900,
-    '75118': 188500,
-    '75119': 181600,
-    '75120': 189800,
-    # Lyon (69381 à 69389)
-    '69381': 29500,
-    '69382': 30900,
-    '69383': 101700,
-    '69384': 35700,
-    '69385': 48800,
-    '69386': 52100,
-    '69387': 82600,
-    '69388': 86300,
-    '69389': 51500,
-    # Marseille (13201 à 13216)
-    '13201': 39500,
-    '13202': 23600,
-    '13203': 45100,
-    '13204': 49100,
-    '13205': 45800,
-    '13206': 42700,
-    '13207': 34800,
-    '13208': 82100,
-    '13209': 76400,
-    '13210': 56500,
-    '13211': 57300,
-    '13212': 61200,
-    '13213': 92300,
-    '13214': 61800,
-    '13215': 79400,
-    '13216': 38400,
-}
+    # 2. Traitement des arrondissements de Paris, Lyon, Marseille
+    pop_arrondissements = {
+        # Paris (75101 à 75120)
+        '75101': 15919,
+        '75102': 21130,
+        '75103': 34120,
+        '75104': 28088,
+        '75105': 57380,
+        '75106': 39625,
+        '75107': 47970,
+        '75108': 35190,
+        '75109': 59250,
+        '75110': 83450,
+        '75111': 142500,
+        '75112': 140100,
+        '75113': 177800,
+        '75114': 133400,
+        '75115': 227700,
+        '75116': 162200,
+        '75117': 163900,
+        '75118': 188500,
+        '75119': 181600,
+        '75120': 189800,
+        # Lyon (69381 à 69389)
+        '69381': 29500,
+        '69382': 30900,
+        '69383': 101700,
+        '69384': 35700,
+        '69385': 48800,
+        '69386': 52100,
+        '69387': 82600,
+        '69388': 86300,
+        '69389': 51500,
+        # Marseille (13201 à 13216)
+        '13201': 39500,
+        '13202': 23600,
+        '13203': 45100,
+        '13204': 49100,
+        '13205': 45800,
+        '13206': 42700,
+        '13207': 34800,
+        '13208': 82100,
+        '13209': 76400,
+        '13210': 56500,
+        '13211': 57300,
+        '13212': 61200,
+        '13213': 92300,
+        '13214': 61800,
+        '13215': 79400,
+        '13216': 38400,
+    }
 
-# Mapping Arrondissement -> Commune Parente
-parent_map = {}
-for code in pop_arrondissements:
-    if code.startswith('751'):
-        parent_map[code] = '75056'
-    elif code.startswith('6938'):
-        parent_map[code] = '69123'
-    elif code.startswith('132'):
-        parent_map[code] = '13055'
+    # Mapping Arrondissement -> Commune Parente
+    parent_map = {}
+    for code in pop_arrondissements:
+        if code.startswith('751'):
+            parent_map[code] = '75056'
+        elif code.startswith('6938'):
+            parent_map[code] = '69123'
+        elif code.startswith('132'):
+            parent_map[code] = '13055'
 
-lignes_arrondissements = []
-for code_arm, pop_arm in pop_arrondissements.items():
-    code_parent = parent_map[code_arm]
-    parent_matches = df_communes[df_communes['code_insee'] == code_parent]
+    lignes_arrondissements = []
+    for code_arm, pop_arm in pop_arrondissements.items():
+        code_parent = parent_map[code_arm]
+        parent_matches = df_communes[df_communes['code_insee'] == code_parent]
 
-    if not parent_matches.empty:
-        parent_row = parent_matches.iloc[0].copy()
-        parent_row['code_insee'] = code_arm
+        if not parent_matches.empty:
+            parent_row = parent_matches.iloc[0].copy()
+            parent_row['code_insee'] = code_arm
 
-        if 'nom_standard' in parent_row:
-            parent_row['nom_standard'] = (
-                f"{parent_row['nom_standard']} Arrondissement {code_arm[-2:]}"
-            )
+            if 'nom_standard' in parent_row:
+                parent_row['nom_standard'] = (
+                    f"{parent_row['nom_standard']} Arrondissement {code_arm[-2:]}"
+                )
 
-        parent_row['population'] = pop_arm
-        # Le sous-bassin de l'arrondissement prend son propre code INSEE
-        parent_row['sous_bassin_de_vie'] = code_arm
-        lignes_arrondissements.append(parent_row)
+            parent_row['population'] = pop_arm
+            # Le sous-bassin de l'arrondissement prend son propre code INSEE
+            parent_row['sous_bassin_de_vie'] = code_arm
+            lignes_arrondissements.append(parent_row)
 
-df_bv_scindes = pd.concat(
-    [df_communes, pd.DataFrame(lignes_arrondissements)], ignore_index=True
-)
+    df_bv_scindes = pd.concat(
+        [df_communes, pd.DataFrame(lignes_arrondissements)], ignore_index=True
+    )
 
-# 3. Jointure avec la liaison avec les communes
-df_liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet")
+    # 3. Jointure avec la liaison avec les communes
+    df_liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet")
 
-#Clé qui permet de garder le code arrondissement quand c'en est un
-arrondissement = df_liaison["CODGEO_INI"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
-df_liaison["code_jointure"] = df_liaison["CODGEO_2026"].where(~arrondissement, df_liaison["CODGEO_INI"])
+    #Clé qui permet de garder le code arrondissement quand c'en est un
+    arrondissement = df_liaison["CODGEO_INI"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
+    df_liaison["code_jointure"] = df_liaison["CODGEO_2026"].where(~arrondissement, df_liaison["CODGEO_INI"])
 
-# Formater les codes INSEE sur 5 caractères
-df_liaison['CODGEO_2026'] = df_liaison['CODGEO_2026'].str.zfill(5)
-df_bv_scindes['code_insee_clean'] = df_bv_scindes['code_insee'].str.zfill(5)
+    # Formater les codes INSEE sur 5 caractères
+    df_liaison['CODGEO_2026'] = df_liaison['CODGEO_2026'].str.zfill(5)
+    df_bv_scindes['code_insee_clean'] = df_bv_scindes['code_insee'].str.zfill(5)
 
-# Fusion : liaison de l'ancien/actuel code vers le référentiel 2026 via CODGEO_2026
-df_merged = pd.merge(
-    df_liaison,
-    df_bv_scindes[
-        ['code_insee_clean', 'sous_bassin_de_vie', 'pop_bv_totale']
-    ].drop_duplicates(),
-    left_on='code_jointure',
-    right_on='code_insee_clean',
-    how='left', validate="many_to_one"
-)
+    # Fusion : liaison de l'ancien/actuel code vers le référentiel 2026 via CODGEO_2026
+    df_merged = pd.merge(
+        df_liaison,
+        df_bv_scindes[
+            ['code_insee_clean', 'sous_bassin_de_vie', 'pop_bv_totale']
+        ].drop_duplicates(),
+        left_on='code_jointure',
+        right_on='code_insee_clean',
+        how='left', validate="many_to_one"
+    )
 
-# Nettoyage des colonnes
-df_merged.drop(columns=['code_insee_clean','LIBGEO_2026','LIBBV2022', 'code_jointure'], inplace=True)
+    # Nettoyage des colonnes
+    df_merged.drop(columns=['code_insee_clean','LIBGEO_2026','LIBBV2022', 'code_jointure'], inplace=True)
 
-# Communes absentes de communes-france-2026 (sans grille de densité) :
-# si leur bassin n'est pas scindé, le sous-bassin est le bassin lui-même
-non_scindes = df_merged.loc[df_merged["sous_bassin_de_vie"] == df_merged["BV2022"], "BV2022"].unique()
-manquant = df_merged["sous_bassin_de_vie"].isna() & df_merged["BV2022"].isin(non_scindes)
-df_merged.loc[manquant, "sous_bassin_de_vie"] = df_merged.loc[manquant, "BV2022"]
-print("Sous-bassins complétés par le bassin non scindé :", manquant.sum())
+    # Communes absentes de communes-france-2026 (sans grille de densité) :
+    # si leur bassin n'est pas scindé, le sous-bassin est le bassin lui-même
+    non_scindes = df_merged.loc[df_merged["sous_bassin_de_vie"] == df_merged["BV2022"], "BV2022"].unique()
+    manquant = df_merged["sous_bassin_de_vie"].isna() & df_merged["BV2022"].isin(non_scindes)
+    df_merged.loc[manquant, "sous_bassin_de_vie"] = df_merged.loc[manquant, "BV2022"]
+    print("Sous-bassins complétés par le bassin non scindé :", manquant.sum())
 
-#4. Contrôles et enregistrement
-print("Codes sans sous-bassin :", df_merged["sous_bassin_de_vie"].isna().sum()) #doit afficher 0
-print(df_merged.loc[df_merged["CODGEO_INI"].isin(["75101", "69381", "13201"]), ["CODGEO_INI", "sous_bassin_de_vie"]]) # 75101, 69381 et 13201 doivent être des sous bassins
-print("Nombre de territoires :", df_merged["sous_bassin_de_vie"].nunique())
+    #4. Contrôles et enregistrement
+    print("Codes sans sous-bassin :", df_merged["sous_bassin_de_vie"].isna().sum()) #doit afficher 0
+    print(df_merged.loc[df_merged["CODGEO_INI"].isin(["75101", "69381", "13201"]), ["CODGEO_INI", "sous_bassin_de_vie"]]) # 75101, 69381 et 13201 doivent être des sous bassins
+    print("Nombre de territoires :", df_merged["sous_bassin_de_vie"].nunique())
 
-df_merged.to_parquet(DATA_OUT / "liaison_bv_scindes.parquet", index=False)
+    df_merged.to_parquet(DATA_OUT / "liaison_bv_scindes.parquet", index=False)
 
-# --- Superficie de chaque commune 2026 (km²), pour la densité calculée au feature engineering ---
-# Paris, Lyon, Marseille : le référentiel ne donne que la ville entière. Elle est remplacée par ses
-# 45 arrondissements, avec leur superficie réelle (API Découpage administratif, en hectares)
-superficie = pd.read_csv(DATA_RAW / "communes-france-2026.csv", usecols=["code_insee", "superficie_km2"],
-                         dtype={"code_insee": str})
-superficie["code_insee"] = superficie["code_insee"].str.zfill(5)
-superficie = superficie.rename(columns={"code_insee": "code_commune"})
+    # --- Superficie de chaque commune 2026 (km²), pour la densité calculée au feature engineering ---
+    # Paris, Lyon, Marseille : le référentiel ne donne que la ville entière. Elle est remplacée par ses
+    # 45 arrondissements, avec leur superficie réelle (API Découpage administratif, en hectares)
+    superficie = pd.read_csv(DATA_RAW / "communes-france-2026.csv", usecols=["code_insee", "superficie_km2"],
+                             dtype={"code_insee": str})
+    superficie["code_insee"] = superficie["code_insee"].str.zfill(5)
+    superficie = superficie.rename(columns={"code_insee": "code_commune"})
 
-arrondissements = pd.read_json(DATA_RAW / "superficie_arrondissements_geoapi.json", dtype={"code": str})
-arrondissements = arrondissements.rename(columns={"code": "code_commune"})
-arrondissements["superficie_km2"] = arrondissements["surface"] / 100      # 1 km² = 100 hectares
-arrondissements = arrondissements[["code_commune", "superficie_km2"]]
+    arrondissements = pd.read_json(DATA_RAW / "superficie_arrondissements_geoapi.json", dtype={"code": str})
+    arrondissements = arrondissements.rename(columns={"code": "code_commune"})
+    arrondissements["superficie_km2"] = arrondissements["surface"] / 100      # 1 km² = 100 hectares
+    arrondissements = arrondissements[["code_commune", "superficie_km2"]]
 
-# Contrôles : 45 arrondissements, surfaces positives, somme proche de la superficie de la ville
-# (moins de 10 % d'écart : détecte une erreur d'unité, pas une imprécision)
-VILLES_ARRONDISSEMENTS = {"75056": r"^751\d\d$", "69123": r"^6938\d$", "13055": r"^132\d\d$"}
-assert len(arrondissements) == 45 and arrondissements["code_commune"].is_unique, "45 arrondissements uniques attendus"
-assert (arrondissements["superficie_km2"] > 0).all(), "Superficie d'arrondissement nulle ou vide"
-for ville, motif in VILLES_ARRONDISSEMENTS.items():
-    somme = arrondissements.loc[arrondissements["code_commune"].str.match(motif), "superficie_km2"].sum()
-    sup_ville = superficie.loc[superficie["code_commune"] == ville, "superficie_km2"].iloc[0]
-    print(f"Bloc 1 - superficie {ville} : ville {sup_ville:.1f} km² | somme des arrondissements {somme:.1f} km²")
-    assert abs(somme / sup_ville - 1) < 0.10, f"{ville} : somme des arrondissements éloignée de la ville (unité ?)"
+    # Contrôles : 45 arrondissements, surfaces positives, somme proche de la superficie de la ville
+    # (moins de 10 % d'écart : détecte une erreur d'unité, pas une imprécision)
+    VILLES_ARRONDISSEMENTS = {"75056": r"^751\d\d$", "69123": r"^6938\d$", "13055": r"^132\d\d$"}
+    assert len(arrondissements) == 45 and arrondissements["code_commune"].is_unique, "45 arrondissements uniques attendus"
+    assert (arrondissements["superficie_km2"] > 0).all(), "Superficie d'arrondissement nulle ou vide"
+    for ville, motif in VILLES_ARRONDISSEMENTS.items():
+        somme = arrondissements.loc[arrondissements["code_commune"].str.match(motif), "superficie_km2"].sum()
+        sup_ville = superficie.loc[superficie["code_commune"] == ville, "superficie_km2"].iloc[0]
+        print(f"Bloc 1 - superficie {ville} : ville {sup_ville:.1f} km² | somme des arrondissements {somme:.1f} km²")
+        assert abs(somme / sup_ville - 1) < 0.10, f"{ville} : somme des arrondissements éloignée de la ville (unité ?)"
 
-# Ville entière retirée, arrondissements ajoutés : la superficie n'est comptée qu'une fois
-superficie = pd.concat([superficie[~superficie["code_commune"].isin(VILLES_ARRONDISSEMENTS)], arrondissements],
-                       ignore_index=True)
-print("Bloc 1 - superficie : communes et arrondissements :", len(superficie),
-      "| un code = une ligne :", superficie["code_commune"].is_unique,
-      "| sans superficie :", superficie["superficie_km2"].isna().sum())
-superficie.to_parquet(DATA_OUT / "communes_superficie_2026.parquet", index=False)
-
+    # Ville entière retirée, arrondissements ajoutés : la superficie n'est comptée qu'une fois
+    superficie = pd.concat([superficie[~superficie["code_commune"].isin(VILLES_ARRONDISSEMENTS)], arrondissements],
+                           ignore_index=True)
+    print("Bloc 1 - superficie : communes et arrondissements :", len(superficie),
+          "| un code = une ligne :", superficie["code_commune"].is_unique,
+          "| sans superficie :", superficie["superficie_km2"].isna().sum())
+    superficie.to_parquet(DATA_OUT / "communes_superficie_2026.parquet", index=False)
 
 # =============================================================================
 # BLOC 2 - FILTRAGE DE DVF+
@@ -281,74 +304,72 @@ superficie.to_parquet(DATA_OUT / "communes_superficie_2026.parquet", index=False
 #  - complet : DVF+ brut téléchargé (source "dvf"), filtré ici ;
 #  - rapide  : fichier filtré téléchargé depuis le Drive (source "dvf_residentiel").
 # Si le fichier existe déjà, le filtrage est sauté (le supprimer pour le refaire).
+def bloc_2():
+    dossier_dep = DATA_OUT / "dvf_plus_residentiel_departements"   # temporaire
 
-fichier_pop = DATA_OUT / "dvf_plus_residentiel.parquet"
-dossier_dep = DATA_OUT / "dvf_plus_residentiel_departements"   # temporaire
+    if FICHIER_POP.exists():
+        print("Bloc 2 - population déjà présente : filtrage sauté")
+    else:
+        # --- Fichiers départementaux, sans les DOM (93 attendus) ---
+        DOM = {"dvf_plus_d971", "dvf_plus_d972", "dvf_plus_d973", "dvf_plus_d974"}
+        fichiers = [f for f in sorted((DATA_RAW / "DVF+").glob("dvf_plus_d*.csv")) if f.stem not in DOM]
 
-if fichier_pop.exists():
-    print("Bloc 2 - population déjà présente : filtrage sauté")
-else:
-    # --- Fichiers départementaux, sans les DOM (93 attendus) ---
-    DOM = {"dvf_plus_d971", "dvf_plus_d972", "dvf_plus_d973", "dvf_plus_d974"}
-    fichiers = [f for f in sorted((DATA_RAW / "DVF+").glob("dvf_plus_d*.csv")) if f.stem not in DOM]
+        # --- Règles de filtrage ---
+        def filtre_perimetre(df):
+            """Garde les ventes d'un seul logement ancien, sur une seule commune."""
+            nature_ok = df["libnatmut"] == "Vente"
+            une_commune = df["nbcomm"] == 1
+            maison_ok = ((df["libtypbien"] == "UNE MAISON") & (df["nblocmai"] == 1)
+                         & (df["nblocapt"] == 0) & (df["nblocact"] == 0))
+            appartement_ok = ((df["libtypbien"] == "UN APPARTEMENT") & (df["nblocapt"] == 1)
+                              & (df["nblocmai"] == 0) & (df["nblocact"] == 0))
+            return df.loc[nature_ok & une_commune & (maison_ok | appartement_ok)]
 
-    # --- Règles de filtrage ---
-    def filtre_perimetre(df):
-        """Garde les ventes d'un seul logement ancien, sur une seule commune."""
-        nature_ok = df["libnatmut"] == "Vente"
-        une_commune = df["nbcomm"] == 1
-        maison_ok = ((df["libtypbien"] == "UNE MAISON") & (df["nblocmai"] == 1)
-                     & (df["nblocapt"] == 0) & (df["nblocact"] == 0))
-        appartement_ok = ((df["libtypbien"] == "UN APPARTEMENT") & (df["nblocapt"] == 1)
-                          & (df["nblocmai"] == 0) & (df["nblocact"] == 0))
-        return df.loc[nature_ok & une_commune & (maison_ok | appartement_ok)]
+        # --- Lecture par blocs, filtrage, un fichier temporaire par département ---
+        dossier_dep.mkdir(exist_ok=True)
+        types_texte = {"coddep": str, "l_codinsee": str}
+        bilan = []
+        for fichier in fichiers:
+            morceaux = []
+            n_brut = 0
+            for bloc in pd.read_csv(fichier, sep="|", chunksize=200_000,
+                                    dtype=types_texte, low_memory=False):
+                n_brut += len(bloc)
+                morceaux.append(filtre_perimetre(bloc))
+            pop = pd.concat(morceaux, ignore_index=True)
+            pop.to_parquet(dossier_dep / f"{fichier.stem}.parquet", index=False)
+            bilan.append({"fichier": fichier.stem, "brut": n_brut, "retenu": len(pop)})
 
-    # --- Lecture par blocs, filtrage, un fichier temporaire par département ---
-    dossier_dep.mkdir(exist_ok=True)
-    types_texte = {"coddep": str, "l_codinsee": str}
-    bilan = []
-    for fichier in fichiers:
-        morceaux = []
-        n_brut = 0
-        for bloc in pd.read_csv(fichier, sep="|", chunksize=200_000,
-                                dtype=types_texte, low_memory=False):
-            n_brut += len(bloc)
-            morceaux.append(filtre_perimetre(bloc))
-        pop = pd.concat(morceaux, ignore_index=True)
-        pop.to_parquet(dossier_dep / f"{fichier.stem}.parquet", index=False)
-        bilan.append({"fichier": fichier.stem, "brut": n_brut, "retenu": len(pop)})
+        # --- Bilan par département (pour le rapport) ---
+        bilan = pd.DataFrame(bilan)
+        bilan["part_retenue_%"] = (bilan["retenu"] / bilan["brut"] * 100).round(1)
+        bilan.to_csv(DATA_OUT / "bilan_filtrage.csv", index=False)
 
-    # --- Bilan par département (pour le rapport) ---
-    bilan = pd.DataFrame(bilan)
-    bilan["part_retenue_%"] = (bilan["retenu"] / bilan["brut"] * 100).round(1)
-    bilan.to_csv(DATA_OUT / "bilan_filtrage.csv", index=False)
-
-    # --- Réunion en un seul fichier ---
-    # Type commun par colonne (texte si un département a du texte, sinon décimal),
-    # puis écriture département par département pour limiter la mémoire.
-    parquets_dep = sorted(dossier_dep.glob("*.parquet"))
-    types = {}
-    for p in parquets_dep:
-        for champ in pq.read_schema(p):
-            ancien = types.get(champ.name)
-            if ancien is None or ancien == champ.type:
-                types[champ.name] = champ.type
-            elif pa.types.is_large_string(ancien) or pa.types.is_large_string(champ.type) \
-                    or pa.types.is_string(ancien) or pa.types.is_string(champ.type):
-                types[champ.name] = pa.large_string()
-            else:
-                types[champ.name] = pa.float64()
-    colonnes = pq.read_schema(parquets_dep[0]).names
-    schema = pa.schema([(c, types[c]) for c in colonnes])
-    with pq.ParquetWriter(fichier_pop, schema) as fichier_unique:
+        # --- Réunion en un seul fichier ---
+        # Type commun par colonne (texte si un département a du texte, sinon décimal),
+        # puis écriture département par département pour limiter la mémoire.
+        parquets_dep = sorted(dossier_dep.glob("*.parquet"))
+        types = {}
         for p in parquets_dep:
-            fichier_unique.write_table(pq.read_table(p, columns=colonnes).cast(schema))
-    shutil.rmtree(dossier_dep)
+            for champ in pq.read_schema(p):
+                ancien = types.get(champ.name)
+                if ancien is None or ancien == champ.type:
+                    types[champ.name] = champ.type
+                elif pa.types.is_large_string(ancien) or pa.types.is_large_string(champ.type) \
+                        or pa.types.is_string(ancien) or pa.types.is_string(champ.type):
+                    types[champ.name] = pa.large_string()
+                else:
+                    types[champ.name] = pa.float64()
+        colonnes = pq.read_schema(parquets_dep[0]).names
+        schema = pa.schema([(c, types[c]) for c in colonnes])
+        with pq.ParquetWriter(FICHIER_POP, schema) as fichier_unique:
+            for p in parquets_dep:
+                fichier_unique.write_table(pq.read_table(p, columns=colonnes).cast(schema))
+        shutil.rmtree(dossier_dep)
 
-    print("Bloc 2 - départements :", len(bilan),
-          "| mutations brutes :", bilan["brut"].sum(),
-          "| ventes retenues :", bilan["retenu"].sum())
-
+        print("Bloc 2 - départements :", len(bilan),
+              "| mutations brutes :", bilan["brut"].sum(),
+              "| ventes retenues :", bilan["retenu"].sum())
 
 # =============================================================================
 # BLOC 3 - ÉCHANTILLON D'APPRENTISSAGE (2014-2024)
@@ -360,40 +381,40 @@ else:
 # 2025 est réservée au test : aucune vente de 2025 n'est tirée.
 
 # --- Nombre de ventes par strate (N_h) ---
-strates = (pd.read_parquet(fichier_pop, columns=["coddep", "anneemut"])
-             .value_counts().rename("N_h").reset_index())
+def bloc_3():
+    exiger(FICHIER_POP, bloc="2")
+    strates = compter_strates()
 
-# --- Nombre à tirer (n_h) et poids (w_h) par strate ---
-taux, plancher = 0.10, 300
-app = strates[strates["anneemut"] <= 2024].copy()
-app["n_h"] = np.minimum(app["N_h"], np.maximum(plancher, np.round(app["N_h"] * taux))).astype(int)
-app["w_h"] = app["N_h"] / app["n_h"]
+    # --- Nombre à tirer (n_h) et poids (w_h) par strate ---
+    app = strates[strates["anneemut"] <= 2024].copy()
+    app["n_h"] = np.minimum(app["N_h"], np.maximum(PLANCHER, np.round(app["N_h"] * TAUX_ECH))).astype(int)
+    app["w_h"] = app["N_h"] / app["n_h"]
 
-# --- Tirage : un nombre au hasard par vente, les n_h plus petits par strate ---
-rng = np.random.default_rng(42)   # graine fixée : tirage reproductible
-morceaux = []
-for dep in sorted(app["coddep"].unique()):
-    d = pd.read_parquet(fichier_pop, filters=[("coddep", "==", dep)])   # un département à la fois
-    d = d[d["anneemut"] <= 2024]
-    d = d.merge(app[["coddep", "anneemut", "n_h", "w_h"]], on=["coddep", "anneemut"])
-    d["alea"] = rng.random(len(d))
-    d["rang"] = d.groupby(["coddep", "anneemut"])["alea"].rank(method="first")
-    morceaux.append(d[d["rang"] <= d["n_h"]].drop(columns=["alea", "rang", "n_h"]))
-ech = pd.concat(morceaux, ignore_index=True)
+    # --- Tirage : un nombre au hasard par vente, les n_h plus petits par strate ---
+    rng = np.random.default_rng(42)   # graine fixée : tirage reproductible
+    morceaux = []
+    for dep in sorted(app["coddep"].unique()):
+        d = pd.read_parquet(FICHIER_POP, filters=[("coddep", "==", dep)])   # un département à la fois
+        d = d[d["anneemut"] <= 2024]
+        d = d.merge(app[["coddep", "anneemut", "n_h", "w_h"]], on=["coddep", "anneemut"])
+        d["alea"] = rng.random(len(d))
+        d["rang"] = d.groupby(["coddep", "anneemut"])["alea"].rank(method="first")
+        morceaux.append(d[d["rang"] <= d["n_h"]].drop(columns=["alea", "rang", "n_h"]))
+    ech = pd.concat(morceaux, ignore_index=True)
 
-# --- Retrait des 11 colonnes écartées par l'audit, puis enregistrement ---
-a_retirer = ["idmutinvar", "idopendata", "codservch", "refdoc", "nbartcgi", "l_artcgi",
-             "l_section", "l_idpar", "l_idparmut", "l_idlocmut", "l_dcnt"]
-ech = ech.drop(columns=a_retirer)
-ech.to_parquet(DATA_OUT / "dvf_plus_echantillon_apprentissage.parquet", index=False)
-ech[["idmutation"]].to_csv(DATA_OUT / "ids_echantillon_apprentissage.csv", index=False)
+    # --- Retrait des 11 colonnes écartées par l'audit, puis enregistrement ---
+    a_retirer = ["idmutinvar", "idopendata", "codservch", "refdoc", "nbartcgi", "l_artcgi",
+                 "l_section", "l_idpar", "l_idparmut", "l_idlocmut", "l_dcnt"]
+    ech = ech.drop(columns=a_retirer)
+    ech.to_parquet(DATA_OUT / "dvf_plus_echantillon_apprentissage.parquet", index=False)
+    ech[["idmutation"]].to_csv(DATA_OUT / "ids_echantillon_apprentissage.csv", index=False)
 
-# --- Contrôles ---
-verif = ech.groupby(["coddep", "anneemut"]).size().rename("tire").reset_index()
-verif = verif.merge(app[["coddep", "anneemut", "n_h"]], on=["coddep", "anneemut"])
-print("Bloc 3 - échantillon :", len(ech),
-      "| strates en écart :", (verif["tire"] != verif["n_h"]).sum(),
-      "| idmutation uniques :", ech["idmutation"].is_unique)
+    # --- Contrôles ---
+    verif = ech.groupby(["coddep", "anneemut"]).size().rename("tire").reset_index()
+    verif = verif.merge(app[["coddep", "anneemut", "n_h"]], on=["coddep", "anneemut"])
+    print("Bloc 3 - échantillon :", len(ech),
+          "| strates en écart :", (verif["tire"] != verif["n_h"]).sum(),
+          "| idmutation uniques :", ech["idmutation"].is_unique)
 
 # =============================================================================
 # BLOC 3 BIS - VENTES POUR LE MODÈLE PAR VENTE (H7) : APPRENTISSAGE ET TEST 2025
@@ -404,65 +425,69 @@ print("Bloc 3 - échantillon :", len(ech),
 # Test : 2025 tiré une seule fois, même règle (10 % par département, au moins 300),
 # graine différente. À ne pas utiliser avant le test final du niveau 2.
 # Chaque vente est rattachée à sa commune 2026, son bassin de vie et son sous-bassin.
+def bloc_3_bis():
+    exiger(FICHIER_POP, bloc="2")
+    exiger(DATA_OUT / "dvf_plus_echantillon_apprentissage.parquet", bloc="3")
+    exiger(DATA_OUT / "liaison_bv_scindes.parquet", bloc="1")
+    ech = pd.read_parquet(DATA_OUT / "dvf_plus_echantillon_apprentissage.parquet")
+    strates = compter_strates()
 
-liaison = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet")
-# valeurfonc n'est pas gardée : avec sbati, elle redonne exactement la cible prix_m2 (fuite)
-COLONNES_VENTES = ["idmutation", "anneemut", "moismut", "coddep", "code_commune", "BV2022",
-                   "sous_bassin_de_vie", "type_bien", "prix_m2", "sbati", "sterr",
-                   "nblocdep", "nb_pieces", "geompar_x", "geompar_y", "w_h"]
-
-
-def preparer_ventes(d):
-    """Règles d'exclusion, nombre de pièces, type de bien et rattachement territorial."""
-    d = d.copy()
-    d["prix_m2"] = d["valeurfonc"] / d["sbati"]
-    d = d[d["valeurfonc"].notna() & (d["valeurfonc"] > 0) & d["prix_m2"].between(50, 50000)].copy()
-    d["type_bien"] = d["libtypbien"].map({"UNE MAISON": "maison", "UN APPARTEMENT": "appartement"})
-    # Une seule de ces colonnes vaut 1 : sa position donne le nombre de pièces (5 = 5 ou plus)
-    pieces = (d[[f"nbmai{i}pp" for i in range(1, 6)]].to_numpy()
-              + d[[f"nbapt{i}pp" for i in range(1, 6)]].to_numpy())
-    d["nb_pieces"] = pieces.argmax(axis=1) + 1
-    d = d.merge(liaison[["CODGEO_INI", "CODGEO_2026", "BV2022", "sous_bassin_de_vie"]],
-                left_on="l_codinsee", right_on="CODGEO_INI", how="left", validate="many_to_one")
-    arrondissement = d["l_codinsee"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
-    d["code_commune"] = d["CODGEO_2026"].where(~arrondissement, d["l_codinsee"])
-    return d[COLONNES_VENTES]
+    liaison = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet")
+    # valeurfonc n'est pas gardée : avec sbati, elle redonne exactement la cible prix_m2 (fuite)
+    COLONNES_VENTES = ["idmutation", "anneemut", "moismut", "coddep", "code_commune", "BV2022",
+                       "sous_bassin_de_vie", "type_bien", "prix_m2", "sbati", "sterr",
+                       "nblocdep", "nb_pieces", "geompar_x", "geompar_y", "w_h"]
 
 
-# --- Apprentissage (2014-2024) ---
-ventes_app = preparer_ventes(ech)
-ventes_app.to_parquet(DATA_OUT / "ventes_apprentissage.parquet", index=False)
+    def preparer_ventes(d):
+        """Règles d'exclusion, nombre de pièces, type de bien et rattachement territorial."""
+        d = d.copy()
+        d["prix_m2"] = d["valeurfonc"] / d["sbati"]
+        d = d[d["valeurfonc"].notna() & (d["valeurfonc"] > 0) & d["prix_m2"].between(50, 50000)].copy()
+        d["type_bien"] = d["libtypbien"].map({"UNE MAISON": "maison", "UN APPARTEMENT": "appartement"})
+        # Une seule de ces colonnes vaut 1 : sa position donne le nombre de pièces (5 = 5 ou plus)
+        pieces = (d[[f"nbmai{i}pp" for i in range(1, 6)]].to_numpy()
+                  + d[[f"nbapt{i}pp" for i in range(1, 6)]].to_numpy())
+        d["nb_pieces"] = pieces.argmax(axis=1) + 1
+        d = d.merge(liaison[["CODGEO_INI", "CODGEO_2026", "BV2022", "sous_bassin_de_vie"]],
+                    left_on="l_codinsee", right_on="CODGEO_INI", how="left", validate="many_to_one")
+        arrondissement = d["l_codinsee"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
+        d["code_commune"] = d["CODGEO_2026"].where(~arrondissement, d["l_codinsee"])
+        return d[COLONNES_VENTES]
 
-# --- Test 2025 : tirage unique ---
-test = strates[strates["anneemut"] == 2025].copy()
-test["n_h"] = np.minimum(test["N_h"], np.maximum(plancher, np.round(test["N_h"] * taux))).astype(int)
-test["w_h"] = test["N_h"] / test["n_h"]
-rng_test = np.random.default_rng(2025)   # graine propre au test, tirage reproductible
-morceaux = []
-for dep in sorted(test["coddep"].unique()):
-    d = pd.read_parquet(fichier_pop, filters=[("coddep", "==", dep), ("anneemut", "==", 2025)])
-    d = d.merge(test[["coddep", "anneemut", "n_h", "w_h"]], on=["coddep", "anneemut"])
-    d["alea"] = rng_test.random(len(d))
-    d["rang"] = d["alea"].rank(method="first")
-    morceaux.append(d[d["rang"] <= d["n_h"]].drop(columns=["alea", "rang", "n_h"]))
-ventes_test = preparer_ventes(pd.concat(morceaux, ignore_index=True))
-ventes_test.to_parquet(DATA_OUT / "ventes_test_2025.parquet", index=False)
-ventes_test[["idmutation"]].to_csv(DATA_OUT / "ids_ventes_test_2025.csv", index=False)
 
-# --- Contrôles ---
-for nom, v in [("apprentissage", ventes_app), ("test 2025", ventes_test)]:
-    print(f"Bloc 3 bis - {nom} : {len(v)} ventes | sans sous-bassin : {v['sous_bassin_de_vie'].isna().sum()}"
-          f" | idmutation uniques : {v['idmutation'].is_unique} | années : {sorted(v['anneemut'].unique())}")
-print("ventes retirées par les règles d'exclusion (apprentissage) :", len(ech) - len(ventes_app))
-avant = ech.groupby("anneemut").size().rename("avant")
-apres = ventes_app.groupby("anneemut").size().rename("après")
-bilan_ventes = pd.concat([avant, apres], axis=1)
-bilan_ventes["retirées"] = bilan_ventes["avant"] - bilan_ventes["après"]
-bilan_ventes["% retiré"] = (bilan_ventes["retirées"] / bilan_ventes["avant"] * 100).round(2)
-print(bilan_ventes.to_string())
-assert "valeurfonc" not in ventes_app.columns and "valeurfonc" not in ventes_test.columns, "fuite : valeurfonc"
-print("pièces :", ventes_app["nb_pieces"].value_counts().sort_index().to_dict())
+    # --- Apprentissage (2014-2024) ---
+    ventes_app = preparer_ventes(ech)
+    ventes_app.to_parquet(DATA_OUT / "ventes_apprentissage.parquet", index=False)
 
+    # --- Test 2025 : tirage unique ---
+    test = strates[strates["anneemut"] == 2025].copy()
+    test["n_h"] = np.minimum(test["N_h"], np.maximum(PLANCHER, np.round(test["N_h"] * TAUX_ECH))).astype(int)
+    test["w_h"] = test["N_h"] / test["n_h"]
+    rng_test = np.random.default_rng(2025)   # graine propre au test, tirage reproductible
+    morceaux = []
+    for dep in sorted(test["coddep"].unique()):
+        d = pd.read_parquet(FICHIER_POP, filters=[("coddep", "==", dep), ("anneemut", "==", 2025)])
+        d = d.merge(test[["coddep", "anneemut", "n_h", "w_h"]], on=["coddep", "anneemut"])
+        d["alea"] = rng_test.random(len(d))
+        d["rang"] = d["alea"].rank(method="first")
+        morceaux.append(d[d["rang"] <= d["n_h"]].drop(columns=["alea", "rang", "n_h"]))
+    ventes_test = preparer_ventes(pd.concat(morceaux, ignore_index=True))
+    ventes_test.to_parquet(DATA_OUT / "ventes_test_2025.parquet", index=False)
+    ventes_test[["idmutation"]].to_csv(DATA_OUT / "ids_ventes_test_2025.csv", index=False)
+
+    # --- Contrôles ---
+    for nom, v in [("apprentissage", ventes_app), ("test 2025", ventes_test)]:
+        print(f"Bloc 3 bis - {nom} : {len(v)} ventes | sans sous-bassin : {v['sous_bassin_de_vie'].isna().sum()}"
+              f" | idmutation uniques : {v['idmutation'].is_unique} | années : {sorted(v['anneemut'].unique())}")
+    print("ventes retirées par les règles d'exclusion (apprentissage) :", len(ech) - len(ventes_app))
+    avant = ech.groupby("anneemut").size().rename("avant")
+    apres = ventes_app.groupby("anneemut").size().rename("après")
+    bilan_ventes = pd.concat([avant, apres], axis=1)
+    bilan_ventes["retirées"] = bilan_ventes["avant"] - bilan_ventes["après"]
+    bilan_ventes["% retiré"] = (bilan_ventes["retirées"] / bilan_ventes["avant"] * 100).round(2)
+    assert "valeurfonc" not in ventes_app.columns and "valeurfonc" not in ventes_test.columns, "fuite : valeurfonc"
+    assert sorted(ventes_test["anneemut"].unique()) == [2025], "le test ne doit contenir que 2025"
 
 # =============================================================================
 # BLOC 4 - TABLES CIBLES : PRIX MÉDIAN AU M2
@@ -479,54 +504,56 @@ print("pièces :", ventes_app["nb_pieces"].value_counts().sort_index().to_dict()
 # (cible_sbv_*) : chaque arrondissement forme son propre sous-bassin.
 
 # --- Population, colonnes utiles seulement ---
-colonnes = ["idmutation", "anneemut", "moismut", "l_codinsee", "libtypbien", "valeurfonc", "sbati"]
-pop = pd.read_parquet(fichier_pop, columns=colonnes)
+def bloc_4():
+    exiger(FICHIER_POP, bloc="2")
+    exiger(DATA_OUT / "liaison_bv_scindes.parquet", bloc="1")
+    colonnes = ["idmutation", "anneemut", "moismut", "l_codinsee", "libtypbien", "valeurfonc", "sbati"]
+    pop = pd.read_parquet(FICHIER_POP, columns=colonnes)
 
-# --- Prix au m2 et règles d'exclusion de l'EDA ---
-pop["prix_m2"] = pop["valeurfonc"] / pop["sbati"]
-pop = pop[pop["valeurfonc"].notna() & (pop["valeurfonc"] > 0)
-          & (pop["prix_m2"] >= 50) & (pop["prix_m2"] <= 50000)].copy()
-pop["type_bien"] = pop["libtypbien"].map({"UNE MAISON": "maison", "UN APPARTEMENT": "appart"})
+    # --- Prix au m2 et règles d'exclusion de l'EDA ---
+    pop["prix_m2"] = pop["valeurfonc"] / pop["sbati"]
+    pop = pop[pop["valeurfonc"].notna() & (pop["valeurfonc"] > 0)
+              & (pop["prix_m2"] >= 50) & (pop["prix_m2"] <= 50000)].copy()
+    pop["type_bien"] = pop["libtypbien"].map({"UNE MAISON": "maison", "UN APPARTEMENT": "appart"})
 
-# --- Rattachement à la commune 2026 et au bassin de vie (table du bloc 1) ---
-liaison = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet")
-pop = pop.merge(liaison[["CODGEO_INI", "CODGEO_2026", "BV2022", "sous_bassin_de_vie"]],
-                left_on="l_codinsee", right_on="CODGEO_INI", how="left", validate="many_to_one")
-arrondissement = pop["l_codinsee"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
-pop["code_commune"] = pop["CODGEO_2026"].where(~arrondissement, pop["l_codinsee"])
+    # --- Rattachement à la commune 2026 et au bassin de vie (table du bloc 1) ---
+    liaison = pd.read_parquet(DATA_OUT / "liaison_bv_scindes.parquet")
+    pop = pop.merge(liaison[["CODGEO_INI", "CODGEO_2026", "BV2022", "sous_bassin_de_vie"]],
+                    left_on="l_codinsee", right_on="CODGEO_INI", how="left", validate="many_to_one")
+    arrondissement = pop["l_codinsee"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
+    pop["code_commune"] = pop["CODGEO_2026"].where(~arrondissement, pop["l_codinsee"])
 
-# --- Périodes ---
-pop["annee"] = pop["anneemut"]
-pop["mois"] = pop["moismut"]
-pop["trimestre"] = (pop["moismut"] - 1) // 3 + 1
-
-
-# --- Calcul d'une table : zone x période, maisons et appartements en colonnes ---
-def table_cible(pop, maille, periode):
-    """Prix médian au m2 et nombre de ventes par zone x période, maisons et appartements."""
-    cles = [maille] + periode
-    t = (pop.groupby(cles + ["type_bien"])["prix_m2"]
-            .agg(n="count", prix_m2_med="median")
-            .unstack("type_bien"))
-    t.columns = [f"{stat}_{typ}" for stat, typ in t.columns]
-    t = t.reset_index()
-    for col in ["n_maison", "n_appart"]:
-        t[col] = t[col].fillna(0).astype(int)
-    t[["prix_m2_med_maison", "prix_m2_med_appart"]] = t[["prix_m2_med_maison", "prix_m2_med_appart"]].round(0)
-    return t[cles + ["n_appart", "n_maison", "prix_m2_med_appart", "prix_m2_med_maison"]]
+    # --- Périodes ---
+    pop["annee"] = pop["anneemut"]
+    pop["mois"] = pop["moismut"]
+    pop["trimestre"] = (pop["moismut"] - 1) // 3 + 1
 
 
-# --- Les six tables, avec contrôle : aucune vente perdue ---
-print("Bloc 4 - ventes après exclusion :", len(pop), "| ventes sans bassin :", pop["sous_bassin_de_vie"].isna().sum())
-mailles = {"commune": "code_commune", "bv": "BV2022", "sbv": "sous_bassin_de_vie"}
-pas_de_temps = {"mois": ["annee", "mois"], "trimestre": ["annee", "trimestre"], "annee": ["annee"]}
-for nom_maille, maille in mailles.items():
-    for nom_pas, periode in pas_de_temps.items():
-        t = table_cible(pop, maille, periode)
-        total = t["n_appart"].sum() + t["n_maison"].sum()
-        t.to_parquet(DATA_OUT / f"cible_{nom_maille}_{nom_pas}.parquet", index=False)
-        print(f"  cible_{nom_maille}_{nom_pas} : {len(t)} lignes | aucune vente perdue : {total == len(pop)}")
+    # --- Calcul d'une table : zone x période, maisons et appartements en colonnes ---
+    def table_cible(pop, maille, periode):
+        """Prix médian au m2 et nombre de ventes par zone x période, maisons et appartements."""
+        cles = [maille] + periode
+        t = (pop.groupby(cles + ["type_bien"])["prix_m2"]
+                .agg(n="count", prix_m2_med="median")
+                .unstack("type_bien"))
+        t.columns = [f"{stat}_{typ}" for stat, typ in t.columns]
+        t = t.reset_index()
+        for col in ["n_maison", "n_appart"]:
+            t[col] = t[col].fillna(0).astype(int)
+        t[["prix_m2_med_maison", "prix_m2_med_appart"]] = t[["prix_m2_med_maison", "prix_m2_med_appart"]].round(0)
+        return t[cles + ["n_appart", "n_maison", "prix_m2_med_appart", "prix_m2_med_maison"]]
 
+
+    # --- Les six tables, avec contrôle : aucune vente perdue ---
+    print("Bloc 4 - ventes après exclusion :", len(pop), "| ventes sans bassin :", pop["sous_bassin_de_vie"].isna().sum())
+    mailles = {"commune": "code_commune", "bv": "BV2022", "sbv": "sous_bassin_de_vie"}
+    pas_de_temps = {"mois": ["annee", "mois"], "trimestre": ["annee", "trimestre"], "annee": ["annee"]}
+    for nom_maille, maille in mailles.items():
+        for nom_pas, periode in pas_de_temps.items():
+            t = table_cible(pop, maille, periode)
+            total = t["n_appart"].sum() + t["n_maison"].sum()
+            t.to_parquet(DATA_OUT / f"cible_{nom_maille}_{nom_pas}.parquet", index=False)
+            print(f"  cible_{nom_maille}_{nom_pas} : {len(t)} lignes | aucune vente perdue : {total == len(pop)}")
 
 # =============================================================================
 # BLOC 5 - FILOSOFI : REVENUS DES MÉNAGES PAR COMMUNE (2014-2021)
@@ -534,49 +561,48 @@ for nom_maille, maille in mailles.items():
 # Un fichier par millésime : Excel de 2014 à 2017 (en-tête ligne 6), CSV ";"
 # de 2018 à 2021 (virgule décimale et "s" pour le secret en 2020-2021).
 # On garde les colonnes présentes les 8 années. Une ligne = commune x année.
-
-dossier_filo = DATA_RAW / "Filo_disp_com"
-
-
-def en_nombre(df, cols):
-    """Convertit des colonnes en nombres (virgule -> point, 's' -> vide)."""
-    return df[cols].apply(lambda s: pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False),
-                                                  errors="coerce"))
+def bloc_5():
+    dossier_filo = DATA_RAW / "Filo_disp_com"
 
 
-# --- Lecture de chaque millésime, année retirée des noms (Q214 -> Q2) ---
-tableaux = []
-for f in sorted(dossier_filo.glob("FILO*DISP_COM*")):
-    annee = int(re.search(r"20\d\d", f.name).group())
-    aa = str(annee)[2:]
-    if f.suffix in (".xls", ".xlsx"):
-        df = pd.read_excel(f, sheet_name="ENSEMBLE", header=5, dtype={"CODGEO": str})
-    else:
-        df = pd.read_csv(f, sep=";", dtype={"CODGEO": str})
-    df.columns = [c[:-2] if c.endswith(aa) and c != "CODGEO" else c for c in df.columns]
-    df["annee"] = annee
-    # 2014 : PACT reconstruit (PTSAC 2014 = PTSA + PCHO à partir de 2015)
-    if annee == 2014:
-        x = en_nombre(df, ["PTSAC", "PBEN"])
-        df["PACT"] = x["PTSAC"] + x["PBEN"]
-    tableaux.append(df)
+    def en_nombre(df, cols):
+        """Convertit des colonnes en nombres (virgule -> point, 's' -> vide)."""
+        return df[cols].apply(lambda s: pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False),
+                                                      errors="coerce"))
 
-# --- Colonnes communes aux 8 années, empilement, conversion en nombres ---
-communes = set(tableaux[0].columns)
-for df in tableaux[1:]:
-    communes = communes & set(df.columns)
-communes = ["CODGEO", "annee"] + sorted(communes - {"CODGEO", "annee"})
-filo = pd.concat([df[communes] for df in tableaux], ignore_index=True)
-cols_num = [c for c in filo.columns if c != "CODGEO"]
-filo[cols_num] = en_nombre(filo, cols_num)
 
-# --- Renommage pour la jointure, contrôles et enregistrement ---
-filo = filo.rename(columns={"CODGEO": "code_commune", "Q2": "niveau_vie_median"})
-print("Bloc 5 - millésimes :", len(tableaux),
-      "| lignes :", len(filo),
-      "| doublons commune x année :", filo.duplicated(["code_commune", "annee"]).sum())
-filo.to_parquet(DATA_OUT / "filosofi_commune_2014_2021.parquet", index=False)
+    # --- Lecture de chaque millésime, année retirée des noms (Q214 -> Q2) ---
+    tableaux = []
+    for f in sorted(dossier_filo.glob("FILO*DISP_COM*")):
+        annee = int(re.search(r"20\d\d", f.name).group())
+        aa = str(annee)[2:]
+        if f.suffix in (".xls", ".xlsx"):
+            df = pd.read_excel(f, sheet_name="ENSEMBLE", header=5, dtype={"CODGEO": str})
+        else:
+            df = pd.read_csv(f, sep=";", dtype={"CODGEO": str})
+        df.columns = [c[:-2] if c.endswith(aa) and c != "CODGEO" else c for c in df.columns]
+        df["annee"] = annee
+        # 2014 : PACT reconstruit (PTSAC 2014 = PTSA + PCHO à partir de 2015)
+        if annee == 2014:
+            x = en_nombre(df, ["PTSAC", "PBEN"])
+            df["PACT"] = x["PTSAC"] + x["PBEN"]
+        tableaux.append(df)
 
+    # --- Colonnes communes aux 8 années, empilement, conversion en nombres ---
+    communes = set(tableaux[0].columns)
+    for df in tableaux[1:]:
+        communes = communes & set(df.columns)
+    communes = ["CODGEO", "annee"] + sorted(communes - {"CODGEO", "annee"})
+    filo = pd.concat([df[communes] for df in tableaux], ignore_index=True)
+    cols_num = [c for c in filo.columns if c != "CODGEO"]
+    filo[cols_num] = en_nombre(filo, cols_num)
+
+    # --- Renommage pour la jointure, contrôles et enregistrement ---
+    filo = filo.rename(columns={"CODGEO": "code_commune", "Q2": "niveau_vie_median"})
+    print("Bloc 5 - millésimes :", len(tableaux),
+          "| lignes :", len(filo),
+          "| doublons commune x année :", filo.duplicated(["code_commune", "annee"]).sum())
+    filo.to_parquet(DATA_OUT / "filosofi_commune_2014_2021.parquet", index=False)
 
 # =============================================================================
 # BLOC 6 - MÉNAGES : STRUCTURE DES MÉNAGES (RECENSEMENT)
@@ -595,62 +621,62 @@ filo.to_parquet(DATA_OUT / "filosofi_commune_2014_2021.parquet", index=False)
 # --- Partie 1 : par commune, recensement 2022 ---
 
 # --- Lecture, codes en texte ---
-chemin_menages = (DATA_RAW / "base-ic-couples-familles-menages-2022_csv"
-                  / "base-ic-couples-familles-menages-2022.CSV")
-codes_texte = {"IRIS": str, "COM": str, "TYP_IRIS": str, "LAB_IRIS": str}
-menages = pd.read_csv(chemin_menages, sep=";", dtype=codes_texte)
-effectifs = ["C22_MEN", "C22_PMEN", "C22_MENPSEUL", "C22_MENFAMMONO",
-             "C22_NE24F3", "C22_NE24F4P", "C22_MENCOUPSENF"]
+def bloc_6():
+    chemin_menages = (DATA_RAW / "base-ic-couples-familles-menages-2022_csv"
+                      / "base-ic-couples-familles-menages-2022.CSV")
+    codes_texte = {"IRIS": str, "COM": str, "TYP_IRIS": str, "LAB_IRIS": str}
+    menages = pd.read_csv(chemin_menages, sep=";", dtype=codes_texte)
+    effectifs = ["C22_MEN", "C22_PMEN", "C22_MENPSEUL", "C22_MENFAMMONO",
+                 "C22_NE24F3", "C22_NE24F4P", "C22_MENCOUPSENF"]
 
-# --- Somme des IRIS par commune ---
-menages_com = menages.groupby("COM")[effectifs].sum().reset_index()
+    # --- Somme des IRIS par commune ---
+    menages_com = menages.groupby("COM")[effectifs].sum().reset_index()
 
-# --- Ratios (dénominateur vide si aucun ménage) ---
-men = menages_com["C22_MEN"].where(menages_com["C22_MEN"] > 0)
-menages_com["taux_personnes_seules"] = menages_com["C22_MENPSEUL"] / men
-menages_com["part_familles_monoparentales"] = menages_com["C22_MENFAMMONO"] / men
-menages_com["part_familles_nombreuses"] = (menages_com["C22_NE24F3"] + menages_com["C22_NE24F4P"]) / men
-menages_com["taille_moyenne_menage"] = menages_com["C22_PMEN"] / men
-menages_com["part_couples_sans_enfants"] = menages_com["C22_MENCOUPSENF"] / men
+    # --- Ratios (dénominateur vide si aucun ménage) ---
+    men = menages_com["C22_MEN"].where(menages_com["C22_MEN"] > 0)
+    menages_com["taux_personnes_seules"] = menages_com["C22_MENPSEUL"] / men
+    menages_com["part_familles_monoparentales"] = menages_com["C22_MENFAMMONO"] / men
+    menages_com["part_familles_nombreuses"] = (menages_com["C22_NE24F3"] + menages_com["C22_NE24F4P"]) / men
+    menages_com["taille_moyenne_menage"] = menages_com["C22_PMEN"] / men
+    menages_com["part_couples_sans_enfants"] = menages_com["C22_MENCOUPSENF"] / men
 
-# --- Enregistrement ---
-menages_com = menages_com.rename(columns={"COM": "code_commune"})
-menages_com["annee_rp"] = 2022
-print("Bloc 6 - communes :", len(menages_com),
-      "| une commune = une ligne :", menages_com["code_commune"].is_unique,
-      "| communes sans ménage :", men.isna().sum())
-menages_com.to_parquet(DATA_OUT / "menages_commune_2022.parquet", index=False)
+    # --- Enregistrement ---
+    menages_com = menages_com.rename(columns={"COM": "code_commune"})
+    menages_com["annee_rp"] = 2022
+    print("Bloc 6 - communes :", len(menages_com),
+          "| une commune = une ligne :", menages_com["code_commune"].is_unique,
+          "| communes sans ménage :", men.isna().sum())
+    menages_com.to_parquet(DATA_OUT / "menages_commune_2022.parquet", index=False)
 
-# --- Partie 2 : par commune et par année, recensements 2019 à 2022 ---
-# Effectifs seulement, pour qu'ils s'additionnent à n'importe quelle maille.
-# Rattachement aux sous-bassins, ratios en % et prolongement à 2023 (copie de
-# 2022) et 2024 (2022 + évolution 2020-2022 bornée) : feature engineering,
-# section 5 bis. Les tests de stabilité qui justifient ces choix : notebook du feature engineering.
-ANNEES_RP = [2019, 2020, 2021, 2022]
-dossier_menages = DATA_RAW / "base-ic-couples-familles-menages-2022_csv"
-EFFECTIFS_MENAGES = ["C_MEN", "C_MENPSEUL", "C_PMEN", "C_FAM",
-                     "C_FAMMONO", "C_COUPSENF", "C_NE24F3", "C_NE24F4P"]
+    # --- Partie 2 : par commune et par année, recensements 2019 à 2022 ---
+    # Effectifs seulement, pour qu'ils s'additionnent à n'importe quelle maille.
+    # Rattachement aux sous-bassins, ratios en % et prolongement à 2023 (copie de
+    # 2022) et 2024 (2022 + évolution 2020-2022 bornée) : feature engineering,
+    # section 5 bis. Les tests de stabilité qui justifient ces choix : notebook du feature engineering.
+    ANNEES_RP = [2019, 2020, 2021, 2022]
+    dossier_menages = DATA_RAW / "base-ic-couples-familles-menages-2022_csv"
+    EFFECTIFS_MENAGES = ["C_MEN", "C_MENPSEUL", "C_PMEN", "C_FAM",
+                         "C_FAMMONO", "C_COUPSENF", "C_NE24F3", "C_NE24F4P"]
 
-# --- Lecture de chaque millésime, année retirée des noms (C19_MEN -> C_MEN), somme par commune ---
-morceaux = []
-for an in ANNEES_RP:
-    df = pd.read_csv(dossier_menages / f"base-ic-couples-familles-menages-{an}.CSV",
-                     sep=";", dtype={"IRIS": str, "COM": str}, low_memory=False)
-    df.columns = [re.sub(rf"^([CP]){str(an)[2:]}_", r"\1_", c) for c in df.columns]
-    com_an = df.groupby("COM", as_index=False)[EFFECTIFS_MENAGES].sum(min_count=1)
-    com_an["annee"] = an
-    morceaux.append(com_an)
-menages_com_an = pd.concat(morceaux, ignore_index=True)
+    # --- Lecture de chaque millésime, année retirée des noms (C19_MEN -> C_MEN), somme par commune ---
+    morceaux = []
+    for an in ANNEES_RP:
+        df = pd.read_csv(dossier_menages / f"base-ic-couples-familles-menages-{an}.CSV",
+                         sep=";", dtype={"IRIS": str, "COM": str}, low_memory=False)
+        df.columns = [re.sub(rf"^([CP]){str(an)[2:]}_", r"\1_", c) for c in df.columns]
+        com_an = df.groupby("COM", as_index=False)[EFFECTIFS_MENAGES].sum(min_count=1)
+        com_an["annee"] = an
+        morceaux.append(com_an)
+    menages_com_an = pd.concat(morceaux, ignore_index=True)
 
-# --- Contrôles et enregistrement (codes commune de chaque millésime, rattachés au FE) ---
-menages_com_an = menages_com_an.rename(columns={"COM": "code_commune"})
-menages_com_an = menages_com_an[["code_commune", "annee"] + EFFECTIFS_MENAGES]
-print("Bloc 6 (partie 2) - lignes :", len(menages_com_an),
-      "| années :", sorted(menages_com_an["annee"].unique()),
-      "| une commune x année = une ligne :", not menages_com_an.duplicated(["code_commune", "annee"]).any(),
-      "| effectifs vides :", menages_com_an[EFFECTIFS_MENAGES].isna().sum().sum())
-menages_com_an.to_parquet(DATA_OUT / "menages_commune_2019_2022.parquet", index=False)
-
+    # --- Contrôles et enregistrement (codes commune de chaque millésime, rattachés au FE) ---
+    menages_com_an = menages_com_an.rename(columns={"COM": "code_commune"})
+    menages_com_an = menages_com_an[["code_commune", "annee"] + EFFECTIFS_MENAGES]
+    print("Bloc 6 (partie 2) - lignes :", len(menages_com_an),
+          "| années :", sorted(menages_com_an["annee"].unique()),
+          "| une commune x année = une ligne :", not menages_com_an.duplicated(["code_commune", "annee"]).any(),
+          "| effectifs vides :", menages_com_an[EFFECTIFS_MENAGES].isna().sum().sum())
+    menages_com_an.to_parquet(DATA_OUT / "menages_commune_2019_2022.parquet", index=False)
 
 # =============================================================================
 # BLOC 7 - PARC DE LOGEMENT PAR COMMUNE (RECENSEMENT 2022)
@@ -661,89 +687,84 @@ menages_com_an.to_parquet(DATA_OUT / "menages_commune_2019_2022.parquet", index=
 # pour recalculer les indicateurs au bassin de vie.
 
 # --- Lecture, codes en texte ---
-chemin_logement = DATA_RAW / "base-ic-logement-2022_csv" / "base-ic-logement-2022.CSV"
-codes_texte = {"IRIS": str, "COM": str, "TYP_IRIS": str, "LAB_IRIS": str}
-logement = pd.read_csv(chemin_logement, sep=";", dtype=codes_texte)
+def bloc_7():
+    chemin_logement = DATA_RAW / "base-ic-logement-2022_csv" / "base-ic-logement-2022.CSV"
+    codes_texte = {"IRIS": str, "COM": str, "TYP_IRIS": str, "LAB_IRIS": str}
+    logement = pd.read_csv(chemin_logement, sep=";", dtype=codes_texte)
 
-# --- Colonnes inutiles et IRIS sans logement ---
-colonnes_dom = ["P22_RP_ELEC", "P22_RP_EAUCH", "P22_RP_BDWC", "P22_RP_CHOS", "P22_RP_CLIM",
-                "P22_RP_TTEGOU", "P22_RP_HABFOR", "P22_RP_CASE", "P22_RP_MIBOIS", "P22_RP_MIDUR"]
-colonnes_chauffage = ["P22_RP_CGAZV", "P22_RP_CFIOUL", "P22_RP_CELEC", "P22_RP_CGAZB", "P22_RP_CAUT"]
-logement = logement.drop(columns=colonnes_dom + colonnes_chauffage + ["LAB_IRIS", "TYP_IRIS"])
-logement = logement[logement["P22_LOG"] > 0]
+    # --- Colonnes inutiles et IRIS sans logement ---
+    colonnes_dom = ["P22_RP_ELEC", "P22_RP_EAUCH", "P22_RP_BDWC", "P22_RP_CHOS", "P22_RP_CLIM",
+                    "P22_RP_TTEGOU", "P22_RP_HABFOR", "P22_RP_CASE", "P22_RP_MIBOIS", "P22_RP_MIDUR"]
+    colonnes_chauffage = ["P22_RP_CGAZV", "P22_RP_CFIOUL", "P22_RP_CELEC", "P22_RP_CGAZB", "P22_RP_CAUT"]
+    logement = logement.drop(columns=colonnes_dom + colonnes_chauffage + ["LAB_IRIS", "TYP_IRIS"])
+    logement = logement[logement["P22_LOG"] > 0]
 
-# --- Somme des IRIS par commune ---
-colonnes_effectifs = [c for c in logement.columns if c.startswith("P22_") or c.startswith("C22_")]
-commune = logement.groupby("COM")[colonnes_effectifs].sum()
-commune["nb_iris"] = logement.groupby("COM")["IRIS"].count()
-commune = commune.reset_index()
-
-
-# --- 19 indicateurs (vides si le dénominateur vaut 0) ---
-def ratio(numerateur, denominateur):
-    """Part en % ; vide si le dénominateur vaut 0."""
-    return (numerateur / denominateur.replace(0, np.nan)) * 100
+    # --- Somme des IRIS par commune ---
+    colonnes_effectifs = [c for c in logement.columns if c.startswith("P22_") or c.startswith("C22_")]
+    commune = logement.groupby("COM")[colonnes_effectifs].sum()
+    commune["nb_iris"] = logement.groupby("COM")["IRIS"].count()
+    commune = commune.reset_index()
 
 
-c = commune
-log_, rp, men = c["P22_LOG"], c["P22_RP"], c["P22_MEN"]
-c["taux_vacance"] = ratio(c["P22_LOGVAC"], log_)
-c["part_rsec"] = ratio(c["P22_RSECOCC"], log_)
-c["part_maisons"] = ratio(c["P22_MAISON"], log_)
-c["part_apparts"] = ratio(c["P22_APPART"], log_)
-c["part_moins40m2"] = ratio(c["P22_RP_M30M2"] + c["P22_RP_3040M2"], rp)
-c["part_100m2_plus"] = ratio(c["P22_RP_100120M2"] + c["P22_RP_120M2P"], rp)
-c["nb_pieces_moyen"] = c["P22_NBPI_RP"] / rp.replace(0, np.nan)
-c["part_avant1946"] = ratio(c["P22_RP_ACH1919"] + c["P22_RP_ACH1945"], rp)
-c["part_2006_2019"] = ratio(c["P22_RP_ACH2019"], rp)
-c["part_proprio"] = ratio(c["P22_RP_PROP"], rp)
-c["part_locataires"] = ratio(c["P22_RP_LOC"], rp)
-c["part_hlm"] = ratio(c["P22_RP_LOCHLMV"], rp)
-c["part_emmenages_2ans"] = ratio(c["P22_MEN_ANEM0002"], men)
-c["anciennete_moyenne"] = c["P22_ANEM_RP"] / rp.replace(0, np.nan)
-c["taille_menage"] = c["P22_NPER_RP"] / rp.replace(0, np.nan)
-c["part_sans_voiture"] = 100 - ratio(c["P22_RP_VOIT1P"], men)
-c["part_2voitures"] = ratio(c["P22_RP_VOIT2P"], men)
-c["part_parking"] = ratio(c["P22_RP_GARL"], men)
-c["part_suroccupes"] = ratio(c["C22_RP_SUROCC_MOD"] + c["C22_RP_SUROCC_ACC"], rp)
-c = c.copy()   # réorganise le tableau en mémoire après l'ajout des colonnes
-indicateurs = ["taux_vacance", "part_rsec", "part_maisons", "part_apparts",
-               "part_moins40m2", "part_100m2_plus", "nb_pieces_moyen",
-               "part_avant1946", "part_2006_2019",
-               "part_proprio", "part_locataires", "part_hlm",
-               "part_emmenages_2ans", "anciennete_moyenne",
-               "taille_menage", "part_sans_voiture", "part_2voitures", "part_parking", "part_suroccupes"]
+    # --- 19 indicateurs (vides si le dénominateur vaut 0 ; fonction ratio définie plus haut) ---
+    c = commune
+    log_, rp, men = c["P22_LOG"], c["P22_RP"], c["P22_MEN"]
+    c["taux_vacance"] = ratio(c["P22_LOGVAC"], log_)
+    c["part_rsec"] = ratio(c["P22_RSECOCC"], log_)
+    c["part_maisons"] = ratio(c["P22_MAISON"], log_)
+    c["part_apparts"] = ratio(c["P22_APPART"], log_)
+    c["part_moins40m2"] = ratio(c["P22_RP_M30M2"] + c["P22_RP_3040M2"], rp)
+    c["part_100m2_plus"] = ratio(c["P22_RP_100120M2"] + c["P22_RP_120M2P"], rp)
+    c["nb_pieces_moyen"] = c["P22_NBPI_RP"] / rp.replace(0, np.nan)
+    c["part_avant1946"] = ratio(c["P22_RP_ACH1919"] + c["P22_RP_ACH1945"], rp)
+    c["part_2006_2019"] = ratio(c["P22_RP_ACH2019"], rp)
+    c["part_proprio"] = ratio(c["P22_RP_PROP"], rp)
+    c["part_locataires"] = ratio(c["P22_RP_LOC"], rp)
+    c["part_hlm"] = ratio(c["P22_RP_LOCHLMV"], rp)
+    c["part_emmenages_2ans"] = ratio(c["P22_MEN_ANEM0002"], men)
+    c["anciennete_moyenne"] = c["P22_ANEM_RP"] / rp.replace(0, np.nan)
+    c["taille_menage"] = c["P22_NPER_RP"] / rp.replace(0, np.nan)
+    c["part_sans_voiture"] = 100 - ratio(c["P22_RP_VOIT1P"], men)
+    c["part_2voitures"] = ratio(c["P22_RP_VOIT2P"], men)
+    c["part_parking"] = ratio(c["P22_RP_GARL"], men)
+    c["part_suroccupes"] = ratio(c["C22_RP_SUROCC_MOD"] + c["C22_RP_SUROCC_ACC"], rp)
+    c = c.copy()   # réorganise le tableau en mémoire après l'ajout des colonnes
+    indicateurs = ["taux_vacance", "part_rsec", "part_maisons", "part_apparts",
+                   "part_moins40m2", "part_100m2_plus", "nb_pieces_moyen",
+                   "part_avant1946", "part_2006_2019",
+                   "part_proprio", "part_locataires", "part_hlm",
+                   "part_emmenages_2ans", "anciennete_moyenne",
+                   "taille_menage", "part_sans_voiture", "part_2voitures", "part_parking", "part_suroccupes"]
 
-# --- Colonnes d'aide ---
-c["dep"] = np.where(c["COM"].str[:2] == "97", c["COM"].str[:3], c["COM"].str[:2])
-c["alsace_moselle"] = c["dep"].isin(["57", "67", "68"])   # absente de DVF+ : signalée, pas supprimée
-c["petite_commune"] = c["P22_LOG"] < 50                    # indicateurs fragiles
-c["log_nb_logements"] = np.log10(c["P22_LOG"])
-c["annee_rp"] = 2022
+    # --- Colonnes d'aide ---
+    c["dep"] = np.where(c["COM"].str[:2] == "97", c["COM"].str[:3], c["COM"].str[:2])
+    c["alsace_moselle"] = c["dep"].isin(["57", "67", "68"])   # absente de DVF+ : signalée, pas supprimée
+    c["petite_commune"] = c["P22_LOG"] < 50                    # indicateurs fragiles
+    c["log_nb_logements"] = np.log10(c["P22_LOG"])
+    c["annee_rp"] = 2022
 
-# --- Contrôle : parts entre 0 et 100 ---
-for col in indicateurs:
-    if col.startswith("part_") or col == "taux_vacance":
-        hors_bornes = ((c[col] < -0.01) | (c[col] > 100.01)).sum()
-        if hors_bornes > 0:
-            print("Attention :", col, "a", hors_bornes, "valeurs hors de [0, 100]")
+    # --- Contrôle : parts entre 0 et 100 ---
+    for col in indicateurs:
+        if col.startswith("part_") or col == "taux_vacance":
+            hors_bornes = ((c[col] < -0.01) | (c[col] > 100.01)).sum()
+            if hors_bornes > 0:
+                print("Attention :", col, "a", hors_bornes, "valeurs hors de [0, 100]")
 
-# --- Enregistrement : identifiants, effectifs bruts, indicateurs, colonnes d'aide ---
-effectifs_utiles = ["P22_LOG", "P22_RP", "P22_MEN",
-                    "P22_LOGVAC", "P22_RSECOCC", "P22_MAISON", "P22_APPART",
-                    "P22_RP_M30M2", "P22_RP_3040M2", "P22_RP_100120M2", "P22_RP_120M2P", "P22_NBPI_RP",
-                    "P22_RP_ACH1919", "P22_RP_ACH1945", "P22_RP_ACH2019",
-                    "P22_RP_PROP", "P22_RP_LOC", "P22_RP_LOCHLMV",
-                    "P22_MEN_ANEM0002", "P22_ANEM_RP", "P22_NPER_RP",
-                    "P22_RP_VOIT1P", "P22_RP_VOIT2P", "P22_RP_GARL",
-                    "C22_RP_SUROCC_MOD", "C22_RP_SUROCC_ACC"]
-colonnes_finales = (["COM", "dep", "annee_rp", "nb_iris", "log_nb_logements"]
-                    + effectifs_utiles + indicateurs + ["alsace_moselle", "petite_commune"])
-resultat = c[colonnes_finales].rename(columns={"COM": "code_commune"})
-print("Bloc 7 - communes :", len(resultat),
-      "| une commune = une ligne :", resultat["code_commune"].is_unique)
-resultat.to_parquet(DATA_OUT / "logement_commune_2022.parquet", index=False)
-
+    # --- Enregistrement : identifiants, effectifs bruts, indicateurs, colonnes d'aide ---
+    effectifs_utiles = ["P22_LOG", "P22_RP", "P22_MEN",
+                        "P22_LOGVAC", "P22_RSECOCC", "P22_MAISON", "P22_APPART",
+                        "P22_RP_M30M2", "P22_RP_3040M2", "P22_RP_100120M2", "P22_RP_120M2P", "P22_NBPI_RP",
+                        "P22_RP_ACH1919", "P22_RP_ACH1945", "P22_RP_ACH2019",
+                        "P22_RP_PROP", "P22_RP_LOC", "P22_RP_LOCHLMV",
+                        "P22_MEN_ANEM0002", "P22_ANEM_RP", "P22_NPER_RP",
+                        "P22_RP_VOIT1P", "P22_RP_VOIT2P", "P22_RP_GARL",
+                        "C22_RP_SUROCC_MOD", "C22_RP_SUROCC_ACC"]
+    colonnes_finales = (["COM", "dep", "annee_rp", "nb_iris", "log_nb_logements"]
+                        + effectifs_utiles + indicateurs + ["alsace_moselle", "petite_commune"])
+    resultat = c[colonnes_finales].rename(columns={"COM": "code_commune"})
+    print("Bloc 7 - communes :", len(resultat),
+          "| une commune = une ligne :", resultat["code_commune"].is_unique)
+    resultat.to_parquet(DATA_OUT / "logement_commune_2022.parquet", index=False)
 
 # =============================================================================
 # BLOC 8 - DÉLINQUANCE ENREGISTRÉE PAR COMMUNE (SSMSI, 2016-2025)
@@ -753,45 +774,44 @@ resultat.to_parquet(DATA_OUT / "logement_commune_2022.parquet", index=False)
 # départemental, jamais par 0. Format large : une ligne = commune x année.
 # Nombres, population et logements conservés pour recalculer les taux au
 # bassin de vie. Taux pour 1 000 habitants (1 000 logements pour les cambriolages).
+def bloc_8():
+    delinq = pd.read_parquet(DATA_RAW / "dataset_delinquance_communale.parquet")
 
-delinq = pd.read_parquet(DATA_RAW / "dataset_delinquance_communale.parquet")
+    # --- Retrait de la ville entière de Paris, Lyon et Marseille ---
+    delinq = delinq[~delinq["CODGEO_2026"].isin(["75056", "69123", "13055"])]
 
-# --- Retrait de la ville entière de Paris, Lyon et Marseille ---
-delinq = delinq[~delinq["CODGEO_2026"].isin(["75056", "69123", "13055"])]
-
-# --- Nombre publié, sinon complément départemental ---
-delinq["nombre_estime"] = delinq["nombre"].fillna(delinq["complement_info_nombre"])
-
-
-# --- Format large : une colonne par indicateur ---
-def nom_court(libelle):
-    """'Vols d'accessoires sur véhicules' -> 'vols_d_accessoires_sur_vehicules'"""
-    sans_accent = unicodedata.normalize("NFKD", libelle).encode("ascii", "ignore").decode()
-    return re.sub(r"[^a-z0-9]+", "_", sans_accent.lower()).strip("_")
+    # --- Nombre publié, sinon complément départemental ---
+    delinq["nombre_estime"] = delinq["nombre"].fillna(delinq["complement_info_nombre"])
 
 
-large = delinq.pivot(index=["CODGEO_2026", "annee"], columns="indicateur", values="nombre_estime")
-large.columns = ["nb_" + nom_court(c) for c in large.columns]
-denominateurs = delinq.groupby(["CODGEO_2026", "annee"])[["insee_pop", "insee_log"]].first()
-masques = ((delinq["est_diffuse"] == "ndiff")
-           .groupby([delinq["CODGEO_2026"], delinq["annee"]]).sum()
-           .rename("n_indicateurs_estimes"))
-large = large.join(denominateurs).join(masques).reset_index()
+    # --- Format large : une colonne par indicateur ---
+    def nom_court(libelle):
+        """'Vols d'accessoires sur véhicules' -> 'vols_d_accessoires_sur_vehicules'"""
+        sans_accent = unicodedata.normalize("NFKD", libelle).encode("ascii", "ignore").decode()
+        return re.sub(r"[^a-z0-9]+", "_", sans_accent.lower()).strip("_")
 
-# --- Taux pour 1 000 (vides si aucun habitant ou logement) ---
-pop = large["insee_pop"].where(large["insee_pop"] > 0)
-log = large["insee_log"].where(large["insee_log"] > 0)
-for col in [c for c in large.columns if c.startswith("nb_")]:
-    denominateur = log if col == "nb_cambriolages_de_logement" else pop
-    large["taux_" + col[3:]] = large[col] / denominateur * 1000
 
-# --- Enregistrement ---
-large = large.rename(columns={"CODGEO_2026": "code_commune"})
-print("Bloc 8 - lignes :", len(large),
-      "| une commune x année = une ligne :", not large.duplicated(["code_commune", "annee"]).any(),
-      "| nombres vides :", large.filter(like="nb_").isna().sum().sum())
-large.to_parquet(DATA_OUT / "delinquance_commune_annee.parquet", index=False)
+    large = delinq.pivot(index=["CODGEO_2026", "annee"], columns="indicateur", values="nombre_estime")
+    large.columns = ["nb_" + nom_court(c) for c in large.columns]
+    denominateurs = delinq.groupby(["CODGEO_2026", "annee"])[["insee_pop", "insee_log"]].first()
+    masques = ((delinq["est_diffuse"] == "ndiff")
+               .groupby([delinq["CODGEO_2026"], delinq["annee"]]).sum()
+               .rename("n_indicateurs_estimes"))
+    large = large.join(denominateurs).join(masques).reset_index()
 
+    # --- Taux pour 1 000 (vides si aucun habitant ou logement) ---
+    pop = large["insee_pop"].where(large["insee_pop"] > 0)
+    log = large["insee_log"].where(large["insee_log"] > 0)
+    for col in [c for c in large.columns if c.startswith("nb_")]:
+        denominateur = log if col == "nb_cambriolages_de_logement" else pop
+        large["taux_" + col[3:]] = large[col] / denominateur * 1000
+
+    # --- Enregistrement ---
+    large = large.rename(columns={"CODGEO_2026": "code_commune"})
+    print("Bloc 8 - lignes :", len(large),
+          "| une commune x année = une ligne :", not large.duplicated(["code_commune", "annee"]).any(),
+          "| nombres vides :", large.filter(like="nb_").isna().sum().sum())
+    large.to_parquet(DATA_OUT / "delinquance_commune_annee.parquet", index=False)
 
 # =============================================================================
 # BLOC 9 - LOVAC : LOGEMENTS PRIVÉS VACANTS PAR COMMUNE (2020-2026)
@@ -802,62 +822,62 @@ large.to_parquet(DATA_OUT / "delinquance_commune_annee.parquet", index=False)
 # taux de l'intercommunalité (EPCI), signalés par taux_impute.
 
 # --- Lecture (tout en texte à cause des "s"), secret -> vide, conversion en nombres ---
-lovac = pd.read_excel(DATA_RAW / "lovac-open-data-2020-a-2026.xlsx", sheet_name="COM open data", dtype=str)
-colonnes_chiffres = [c for c in lovac.columns if c.startswith("pp_") or c.startswith("ff_")]
-for col in colonnes_chiffres:
-    lovac[col] = pd.to_numeric(lovac[col].replace("s", np.nan))
+def bloc_9():
+    lovac = pd.read_excel(DATA_RAW / "lovac-open-data-2020-a-2026.xlsx", sheet_name="COM open data", dtype=str)
+    colonnes_chiffres = [c for c in lovac.columns if c.startswith("pp_") or c.startswith("ff_")]
+    for col in colonnes_chiffres:
+        lovac[col] = pd.to_numeric(lovac[col].replace("s", np.nan))
 
-# --- Format long : un millésime à la fois ---
-morceaux = []
-for annee in range(2020, 2027):
-    suffixe = str(annee)[2:]
-    morceau = pd.DataFrame({
-        "COM": lovac["CODGEO_26"],
-        "EPCI": lovac["EPCI_26"],
-        "millesime": annee,
-        "vacants": lovac["pp_vacant_" + suffixe],
-        "vacants_2ans": lovac["pp_vacant_plus_2ans_" + suffixe],
-    })
-    # Pas de parc privé total pour le millésime 2026
-    if "ff_pp_total_" + suffixe in lovac.columns:
-        morceau["parc_prive"] = lovac["ff_pp_total_" + suffixe]
-    else:
-        morceau["parc_prive"] = np.nan
-    morceaux.append(morceau)
-lovac_long = pd.concat(morceaux, ignore_index=True)
-lovac_long["annee_situation"] = lovac_long["millesime"] - 1
-lovac_long["annee_vente_associee"] = lovac_long["millesime"]
+    # --- Format long : un millésime à la fois ---
+    morceaux = []
+    for annee in range(2020, 2027):
+        suffixe = str(annee)[2:]
+        morceau = pd.DataFrame({
+            "COM": lovac["CODGEO_26"],
+            "EPCI": lovac["EPCI_26"],
+            "millesime": annee,
+            "vacants": lovac["pp_vacant_" + suffixe],
+            "vacants_2ans": lovac["pp_vacant_plus_2ans_" + suffixe],
+        })
+        # Pas de parc privé total pour le millésime 2026
+        if "ff_pp_total_" + suffixe in lovac.columns:
+            morceau["parc_prive"] = lovac["ff_pp_total_" + suffixe]
+        else:
+            morceau["parc_prive"] = np.nan
+        morceaux.append(morceau)
+    lovac_long = pd.concat(morceaux, ignore_index=True)
+    lovac_long["annee_situation"] = lovac_long["millesime"] - 1
+    lovac_long["annee_vente_associee"] = lovac_long["millesime"]
 
-# --- Indicateurs en % (ratio défini au bloc 7) et signalements ---
-lovac_long["taux_vacance_lovac"] = ratio(lovac_long["vacants"], lovac_long["parc_prive"])
-lovac_long["taux_vacance_2ans"] = ratio(lovac_long["vacants_2ans"], lovac_long["parc_prive"])
-lovac_long["part_longue_parmi_vacants"] = ratio(lovac_long["vacants_2ans"], lovac_long["vacants"])
-lovac_long["apres_rupture"] = lovac_long["millesime"] >= 2024        # fin de la taxe d'habitation
-lovac_long["dep"] = np.where(lovac_long["COM"].str[:2] == "97",
-                             lovac_long["COM"].str[:3], lovac_long["COM"].str[:2])
-lovac_long["alsace_moselle"] = lovac_long["dep"].isin(["57", "67", "68"])
-lovac_long["mayotte"] = lovac_long["dep"] == "976"
+    # --- Indicateurs en % (fonction ratio) et signalements ---
+    lovac_long["taux_vacance_lovac"] = ratio(lovac_long["vacants"], lovac_long["parc_prive"])
+    lovac_long["taux_vacance_2ans"] = ratio(lovac_long["vacants_2ans"], lovac_long["parc_prive"])
+    lovac_long["part_longue_parmi_vacants"] = ratio(lovac_long["vacants_2ans"], lovac_long["vacants"])
+    lovac_long["apres_rupture"] = lovac_long["millesime"] >= 2024        # fin de la taxe d'habitation
+    lovac_long["dep"] = np.where(lovac_long["COM"].str[:2] == "97",
+                                 lovac_long["COM"].str[:3], lovac_long["COM"].str[:2])
+    lovac_long["alsace_moselle"] = lovac_long["dep"].isin(["57", "67", "68"])
+    lovac_long["mayotte"] = lovac_long["dep"] == "976"
 
-# --- Taux cachés : taux de l'EPCI (sommes des communes connues, même millésime) ---
-connues = lovac_long[lovac_long["taux_vacance_lovac"].notna()]
-taux_epci = connues.groupby(["EPCI", "millesime"])[["vacants", "parc_prive"]].sum().reset_index()
-taux_epci["taux_vacance_epci"] = ratio(taux_epci["vacants"], taux_epci["parc_prive"])
-lovac_long = lovac_long.merge(taux_epci[["EPCI", "millesime", "taux_vacance_epci"]],
-                              on=["EPCI", "millesime"], how="left")
-lovac_long["taux_impute"] = lovac_long["taux_vacance_lovac"].isna() & lovac_long["taux_vacance_epci"].notna()
-lovac_long["taux_vacance_complete"] = lovac_long["taux_vacance_lovac"].fillna(lovac_long["taux_vacance_epci"])
+    # --- Taux cachés : taux de l'EPCI (sommes des communes connues, même millésime) ---
+    connues = lovac_long[lovac_long["taux_vacance_lovac"].notna()]
+    taux_epci = connues.groupby(["EPCI", "millesime"])[["vacants", "parc_prive"]].sum().reset_index()
+    taux_epci["taux_vacance_epci"] = ratio(taux_epci["vacants"], taux_epci["parc_prive"])
+    lovac_long = lovac_long.merge(taux_epci[["EPCI", "millesime", "taux_vacance_epci"]],
+                                  on=["EPCI", "millesime"], how="left")
+    lovac_long["taux_impute"] = lovac_long["taux_vacance_lovac"].isna() & lovac_long["taux_vacance_epci"].notna()
+    lovac_long["taux_vacance_complete"] = lovac_long["taux_vacance_lovac"].fillna(lovac_long["taux_vacance_epci"])
 
-# --- Contrôles et enregistrement ---
-hors_bornes = sum(((lovac_long[col] < 0) | (lovac_long[col] > 100)).sum()
-                  for col in ["taux_vacance_lovac", "taux_vacance_2ans",
-                              "part_longue_parmi_vacants", "taux_vacance_complete"])
-lovac_long = lovac_long.rename(columns={"COM": "code_commune"})
-print("Bloc 9 - lignes :", len(lovac_long),
-      "| une commune x millésime = une ligne :", not lovac_long.duplicated(["code_commune", "millesime"]).any(),
-      "| taux hors [0, 100] :", hors_bornes,
-      "| taux complétés par l'EPCI :", lovac_long["taux_impute"].sum())
-lovac_long.to_parquet(DATA_OUT / "lovac_commune_annee.parquet", index=False)
-
+    # --- Contrôles et enregistrement ---
+    hors_bornes = sum(((lovac_long[col] < 0) | (lovac_long[col] > 100)).sum()
+                      for col in ["taux_vacance_lovac", "taux_vacance_2ans",
+                                  "part_longue_parmi_vacants", "taux_vacance_complete"])
+    lovac_long = lovac_long.rename(columns={"COM": "code_commune"})
+    print("Bloc 9 - lignes :", len(lovac_long),
+          "| une commune x millésime = une ligne :", not lovac_long.duplicated(["code_commune", "millesime"]).any(),
+          "| taux hors [0, 100] :", hors_bornes,
+          "| taux complétés par l'EPCI :", lovac_long["taux_impute"].sum())
+    lovac_long.to_parquet(DATA_OUT / "lovac_commune_annee.parquet", index=False)
 
 # =============================================================================
 # BLOC 10 - ÉQUIPEMENTS (BPE 2015 ET 2020) PAR COMMUNE
@@ -869,30 +889,30 @@ lovac_long.to_parquet(DATA_OUT / "lovac_commune_annee.parquet", index=False)
 # BPE 2015 -> ventes 2016-2020 ; BPE 2020 -> ventes 2021-2025.
 
 # --- Lecture des seules colonnes utiles ---
-colonnes_utiles = ["code_commune", "code_commune_2026", "bpe_annee_source"]
-equip = pd.read_csv(DATA_RAW / "cible_commune_annee_type_BPE_152_indicateurs.csv",
-                    usecols=lambda c: c in colonnes_utiles or c.startswith("bpe_presence_"),
-                    dtype={"code_commune": str, "code_commune_2026": str})
-colonnes_presence = [c for c in equip.columns if c.startswith("bpe_presence_")]
+def bloc_10():
+    colonnes_utiles = ["code_commune", "code_commune_2026", "bpe_annee_source"]
+    equip = pd.read_csv(DATA_RAW / "cible_commune_annee_type_BPE_152_indicateurs.csv",
+                        usecols=lambda c: c in colonnes_utiles or c.startswith("bpe_presence_"),
+                        dtype={"code_commune": str, "code_commune_2026": str})
+    colonnes_presence = [c for c in equip.columns if c.startswith("bpe_presence_")]
 
-# --- Lignes avec un millésime BPE, code commune en géographie 2026 ---
-equip = equip.dropna(subset=["bpe_annee_source"]).copy()
-equip["millesime_bpe"] = equip["bpe_annee_source"].astype(int)
-arrondissement = equip["code_commune"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
-equip["code_commune_geo2026"] = equip["code_commune_2026"].where(~arrondissement, equip["code_commune"])
+    # --- Lignes avec un millésime BPE, code commune en géographie 2026 ---
+    equip = equip.dropna(subset=["bpe_annee_source"]).copy()
+    equip["millesime_bpe"] = equip["bpe_annee_source"].astype(int)
+    arrondissement = equip["code_commune"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
+    equip["code_commune_geo2026"] = equip["code_commune_2026"].where(~arrondissement, equip["code_commune"])
 
-# --- Contrôle puis une ligne par commune x millésime ---
-cles = ["code_commune_geo2026", "millesime_bpe"]
-ecarts = equip.groupby(cles)[colonnes_presence].nunique(dropna=False).max(axis=1)
-equip = equip.drop_duplicates(cles)[cles + colonnes_presence]
-equip = equip.rename(columns={"code_commune_geo2026": "code_commune"})
+    # --- Contrôle puis une ligne par commune x millésime ---
+    cles = ["code_commune_geo2026", "millesime_bpe"]
+    ecarts = equip.groupby(cles)[colonnes_presence].nunique(dropna=False).max(axis=1)
+    equip = equip.drop_duplicates(cles)[cles + colonnes_presence]
+    equip = equip.rename(columns={"code_commune_geo2026": "code_commune"})
 
-# --- Enregistrement ---
-print("Bloc 10 - lignes :", len(equip),
-      "| une commune x millésime = une ligne :", not equip.duplicated(["code_commune", "millesime_bpe"]).any(),
-      "| communes où les indicateurs diffèrent :", (ecarts > 1).sum())
-equip.to_parquet(DATA_OUT / "equipements_commune_millesime.parquet", index=False)
-
+    # --- Enregistrement ---
+    print("Bloc 10 - lignes :", len(equip),
+          "| une commune x millésime = une ligne :", not equip.duplicated(["code_commune", "millesime_bpe"]).any(),
+          "| communes où les indicateurs diffèrent :", (ecarts > 1).sum())
+    equip.to_parquet(DATA_OUT / "equipements_commune_millesime.parquet", index=False)
 
 # =============================================================================
 # BLOC 11 - TAUX DES CRÉDITS IMMOBILIERS (BANQUE DE FRANCE, 1998-2026)
@@ -902,28 +922,28 @@ equip.to_parquet(DATA_OUT / "equipements_commune_millesime.parquet", index=False
 # avec les mêmes clés de période que les tables cibles du bloc 4.
 
 # --- Lecture : 6 lignes de métadonnées, pas d'en-tête ---
-taux = pd.read_csv(DATA_RAW / "Taux d'intérêt annuel des crédits immobiliers.csv",
-                   sep=";", skiprows=6, header=None, names=["date", "taux"])
+def bloc_11():
+    taux = pd.read_csv(DATA_RAW / "Taux d'intérêt annuel des crédits immobiliers.csv",
+                       sep=";", skiprows=6, header=None, names=["date", "taux"])
 
-# --- Conversion (virgule décimale), ordre chronologique, périodes ---
-taux["taux"] = pd.to_numeric(taux["taux"].str.replace(",", ".", regex=False))
-taux["date"] = pd.to_datetime(taux["date"])
-taux = taux.sort_values("date").reset_index(drop=True)
-taux["annee"] = taux["date"].dt.year
-taux["mois"] = taux["date"].dt.month
-taux["trimestre"] = (taux["mois"] - 1) // 3 + 1
+    # --- Conversion (virgule décimale), ordre chronologique, périodes ---
+    taux["taux"] = pd.to_numeric(taux["taux"].str.replace(",", ".", regex=False))
+    taux["date"] = pd.to_datetime(taux["date"])
+    taux = taux.sort_values("date").reset_index(drop=True)
+    taux["annee"] = taux["date"].dt.year
+    taux["mois"] = taux["date"].dt.month
+    taux["trimestre"] = (taux["mois"] - 1) // 3 + 1
 
-# --- Trois tables et enregistrement ---
-taux_mois = taux[["annee", "mois", "taux"]]
-taux_trimestre = taux.groupby(["annee", "trimestre"], as_index=False)["taux"].mean().round(2)
-taux_annee = taux.groupby("annee", as_index=False)["taux"].mean().round(2)
-taux_mois.to_parquet(DATA_OUT / "taux_credit_mois.parquet", index=False)
-taux_trimestre.to_parquet(DATA_OUT / "taux_credit_trimestre.parquet", index=False)
-taux_annee.to_parquet(DATA_OUT / "taux_credit_annee.parquet", index=False)
-print("Bloc 11 - mois :", len(taux_mois),
-      "| mois en double :", taux.duplicated(["annee", "mois"]).sum(),
-      "| trimestres :", len(taux_trimestre), "| années :", len(taux_annee))
-
+    # --- Trois tables et enregistrement ---
+    taux_mois = taux[["annee", "mois", "taux"]]
+    taux_trimestre = taux.groupby(["annee", "trimestre"], as_index=False)["taux"].mean().round(2)
+    taux_annee = taux.groupby("annee", as_index=False)["taux"].mean().round(2)
+    taux_mois.to_parquet(DATA_OUT / "taux_credit_mois.parquet", index=False)
+    taux_trimestre.to_parquet(DATA_OUT / "taux_credit_trimestre.parquet", index=False)
+    taux_annee.to_parquet(DATA_OUT / "taux_credit_annee.parquet", index=False)
+    print("Bloc 11 - mois :", len(taux_mois),
+          "| mois en double :", taux.duplicated(["annee", "mois"]).sum(),
+          "| trimestres :", len(taux_trimestre), "| années :", len(taux_annee))
 
 # =============================================================================
 # BLOC 12 - ÉQUIPEMENTS PAR COMMUNE (BPE 2025)
@@ -934,43 +954,78 @@ print("Bloc 11 - mois :", len(taux_mois),
 # comptés : nombres comparables à ceux de l'EDA complémentaire (97,4 % des bassins
 # à moins de 1 % d'écart). Une ligne = une commune (géographie 2026, arrondissements
 # séparés). S'additionne à n'importe quelle maille ; commune absente = 0 équipement.
+def bloc_12():
+    exiger(DATA_OUT / "liaison_commune_bv2022.parquet", bloc="1")
+    DOMAINES = {"A": "services", "B": "commerces", "D": "sante",
+                "E": "transports", "F": "sports", "G": "tourisme"}   # C (enseignement) exclu
 
-DOMAINES = {"A": "services", "B": "commerces", "D": "sante",
-            "E": "transports", "F": "sports", "G": "tourisme"}   # C (enseignement) exclu
+    # --- Lecture : 4 colonnes utiles sur 95 ---
+    bpe = pd.read_parquet(DATA_RAW / "BPE25.parquet", columns=["DEPCOM", "DEP", "DOM", "TYPEQU"])
 
-# --- Lecture : 4 colonnes utiles sur 95 ---
-bpe = pd.read_parquet(DATA_RAW / "BPE25.parquet", columns=["DEPCOM", "DEP", "DOM", "TYPEQU"])
+    # --- Types de la BPE en évolution (2025, bassins de vie de métropole) ---
+    evo = pd.read_csv(DATA_RAW / "DS_BPE_EVOLUTION_2025_data.csv", sep=None, engine="python", dtype=str,
+                      usecols=["GEO_OBJECT", "GEO", "TIME_PERIOD", "FACILITY_TYPE"])
+    types_evo = set(evo.loc[(evo["GEO_OBJECT"] == "BV2022") & (evo["TIME_PERIOD"] == "2025")
+                            & ~evo["GEO"].str.startswith("97"), "FACILITY_TYPE"])
 
-# --- Types de la BPE en évolution (2025, bassins de vie de métropole) ---
-evo = pd.read_csv(DATA_RAW / "DS_BPE_EVOLUTION_2025_data.csv", sep=None, engine="python", dtype=str,
-                  usecols=["GEO_OBJECT", "GEO", "TIME_PERIOD", "FACILITY_TYPE"])
-types_evo = set(evo.loc[(evo["GEO_OBJECT"] == "BV2022") & (evo["TIME_PERIOD"] == "2025")
-                        & ~evo["GEO"].str.startswith("97"), "FACILITY_TYPE"])
+    # --- Métropole, 6 domaines, types communs aux deux fichiers ---
+    n_brut = len(bpe)
+    bpe = bpe[~bpe["DEP"].str.startswith("97") & bpe["DOM"].isin(DOMAINES) & bpe["TYPEQU"].isin(types_evo)].copy()
 
-# --- Métropole, 6 domaines, types communs aux deux fichiers ---
-n_brut = len(bpe)
-bpe = bpe[~bpe["DEP"].str.startswith("97") & bpe["DOM"].isin(DOMAINES) & bpe["TYPEQU"].isin(types_evo)].copy()
+    # --- Rattachement à la commune 2026 (table de liaison du bloc 1), arrondissements gardés ---
+    liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", columns=["CODGEO_INI", "CODGEO_2026"])
+    bpe = bpe.merge(liaison, left_on="DEPCOM", right_on="CODGEO_INI", how="left", validate="many_to_one")
+    arrondissement = bpe["DEPCOM"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
+    bpe["code_commune"] = bpe["CODGEO_2026"].where(~arrondissement, bpe["DEPCOM"])
 
-# --- Rattachement à la commune 2026 (table de liaison du bloc 1), arrondissements gardés ---
-liaison = pd.read_parquet(DATA_OUT / "liaison_commune_bv2022.parquet", columns=["CODGEO_INI", "CODGEO_2026"])
-bpe = bpe.merge(liaison, left_on="DEPCOM", right_on="CODGEO_INI", how="left", validate="many_to_one")
-arrondissement = bpe["DEPCOM"].str.match(r"^(751\d\d|6938\d|132\d\d)$")
-bpe["code_commune"] = bpe["CODGEO_2026"].where(~arrondissement, bpe["DEPCOM"])
+    # --- Nombre d'équipements par commune et par domaine ---
+    bpe["domaine"] = bpe["DOM"].map(DOMAINES)
+    equip25 = (bpe.groupby(["code_commune", "domaine"]).size()
+                  .unstack(fill_value=0)
+                  .add_prefix("nb_equip_")
+                  .reset_index())
+    equip25.columns.name = None
+    equip25["millesime_bpe"] = 2025
 
-# --- Nombre d'équipements par commune et par domaine ---
-bpe["domaine"] = bpe["DOM"].map(DOMAINES)
-equip25 = (bpe.groupby(["code_commune", "domaine"]).size()
-              .unstack(fill_value=0)
-              .add_prefix("nb_equip_")
-              .reset_index())
-equip25.columns.name = None
-equip25["millesime_bpe"] = 2025
+    # --- Contrôles et enregistrement ---
+    colonnes_nb = [c for c in equip25.columns if c.startswith("nb_equip_")]
+    print("Bloc 12 - équipements gardés :", len(bpe), "sur", n_brut,
+          "| sans commune 2026 :", bpe["code_commune"].isna().sum(),
+          "| communes :", len(equip25),
+          "| une commune = une ligne :", equip25["code_commune"].is_unique,
+          "| aucun équipement perdu :", equip25[colonnes_nb].sum().sum() == bpe["code_commune"].notna().sum())
+    equip25.to_parquet(DATA_OUT / "equipements_commune_2025.parquet", index=False)
 
-# --- Contrôles et enregistrement ---
-colonnes_nb = [c for c in equip25.columns if c.startswith("nb_equip_")]
-print("Bloc 12 - équipements gardés :", len(bpe), "sur", n_brut,
-      "| sans commune 2026 :", bpe["code_commune"].isna().sum(),
-      "| communes :", len(equip25),
-      "| une commune = une ligne :", equip25["code_commune"].is_unique,
-      "| aucun équipement perdu :", equip25[colonnes_nb].sum().sum() == bpe["code_commune"].notna().sum())
-equip25.to_parquet(DATA_OUT / "equipements_commune_2025.parquet", index=False)
+# =============================================================================
+# LANCEMENT
+# =============================================================================
+BLOCS = {
+    "1": (bloc_1, "TABLE DE LIAISON COMMUNE -> BASSIN DE VIE 2022"),
+    "2": (bloc_2, "FILTRAGE DE DVF+"),
+    "3": (bloc_3, "ÉCHANTILLON D'APPRENTISSAGE (2014-2024)"),
+    "3bis": (bloc_3_bis, "VENTES POUR LE MODÈLE PAR VENTE (H7) : APPRENTISSAGE ET TEST 2025"),
+    "4": (bloc_4, "TABLES CIBLES : PRIX MÉDIAN AU M2"),
+    "5": (bloc_5, "FILOSOFI : REVENUS DES MÉNAGES PAR COMMUNE (2014-2021)"),
+    "6": (bloc_6, "MÉNAGES : STRUCTURE DES MÉNAGES (RECENSEMENT)"),
+    "7": (bloc_7, "PARC DE LOGEMENT PAR COMMUNE (RECENSEMENT 2022)"),
+    "8": (bloc_8, "DÉLINQUANCE ENREGISTRÉE PAR COMMUNE (SSMSI, 2016-2025)"),
+    "9": (bloc_9, "LOVAC : LOGEMENTS PRIVÉS VACANTS PAR COMMUNE (2020-2026)"),
+    "10": (bloc_10, "ÉQUIPEMENTS (BPE 2015 ET 2020) PAR COMMUNE"),
+    "11": (bloc_11, "TAUX DES CRÉDITS IMMOBILIERS (BANQUE DE FRANCE, 1998-2026)"),
+    "12": (bloc_12, "ÉQUIPEMENTS PAR COMMUNE (BPE 2025)"),
+}
+
+if __name__ == "__main__":
+    demandes = sys.argv[1:]
+    if demandes == ["liste"]:
+        for cle, (_, titre) in BLOCS.items():
+            print(f"  {cle:<5} {titre}")
+        sys.exit()
+    inconnus = [d for d in demandes if d not in BLOCS]
+    if inconnus:
+        sys.exit(f"Bloc inconnu : {inconnus}. Blocs disponibles : {', '.join(BLOCS)}")
+    DATA_OUT.mkdir(parents=True, exist_ok=True)
+    for cle, (fonction, titre) in BLOCS.items():
+        if not demandes or cle in demandes:
+            print(f"[bloc {cle}] {titre}")
+            fonction()

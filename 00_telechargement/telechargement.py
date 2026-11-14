@@ -10,6 +10,8 @@
 #   python 00_telechargement/telechargement.py              -> affiche la liste des sources
 #   python 00_telechargement/telechargement.py dvf taux     -> télécharge seulement ces sources
 #   python 00_telechargement/telechargement.py tout         -> télécharge toutes les sources
+#   python 00_telechargement/telechargement.py parcours_court -> télécharge le kit du parcours court
+#                                                              (9 fichiers déjà préparés)
 #
 # Un fichier déjà complet dans data/raw/ n'est pas re-téléchargé.
 # Si un téléchargement échoue (Google Drive limite parfois les gros téléchargements),
@@ -65,6 +67,64 @@ SOURCES = {
         "type": "fichier",
         "id": "15w3jw5mqsMzK6fWvRnnNlBBN9ofVM40I",
         "nom": "table_modelisation_bv.parquet",
+        "dossier": DATA_OUT,
+    },
+    # --- Kit du parcours court : fichiers déjà préparés, rangés dans data/processed/ ---
+    # Avec la table de modélisation (ci-dessus), ils suffisent à lancer prepa_tour2 (P7, P9),
+    # les hypothèses H3 à H7 et l'évaluation 2025. Liste : PARCOURS_COURT, plus bas.
+    # Filosofi par commune (entrée de P7)
+    "filosofi_commune": {
+        "type": "fichier",
+        "id": "1yaVTW81JLPbMW5j3dkxIeZulGx3vXzuC",
+        "nom": "filosofi_commune_2014_2021.parquet",
+        "dossier": DATA_OUT,
+    },
+    # Table de liaison commune -> sous-bassin de vie (entrée de P7)
+    "liaison_bv_scindes": {
+        "type": "fichier",
+        "id": "12n1_4_4vGcedspUMvczF96LEBXRbhX-z",
+        "nom": "liaison_bv_scindes.parquet",
+        "dossier": DATA_OUT,
+    },
+    # Taux des crédits immobiliers par mois (entrée de P7)
+    "taux_credit_mois": {
+        "type": "fichier",
+        "id": "1QK6fSNf0Bsqnr7l8m315N5DebsVc4RcJ",
+        "nom": "taux_credit_mois.parquet",
+        "dossier": DATA_OUT,
+    },
+    # Indicateurs de capacité d'achat (P7) et de volume et élan (P9) : lus par H5-H6, H7 et l'évaluation 2025
+    "fe_capacite_achat": {
+        "type": "fichier",
+        "id": "1Y_HOSwKaSCuNe2SKI3Mt9U4ffFSmczTZ",
+        "nom": "fe_capacite_achat_sbv.parquet",
+        "dossier": DATA_OUT,
+    },
+    "fe_volume_elan": {
+        "type": "fichier",
+        "id": "1Hbypz34fvskGC5mRsV6xYh0h9Z5rgorh",
+        "nom": "fe_volume_elan_sbv.parquet",
+        "dossier": DATA_OUT,
+    },
+    # Ventes pour le modèle par vente, 2014-2024 (H7)
+    "ventes_apprentissage": {
+        "type": "fichier",
+        "id": "1hLc8lCpAo4UOlL4HYjjMkga85ttXwv47",
+        "nom": "ventes_apprentissage.parquet",
+        "dossier": DATA_OUT,
+    },
+    # Ventes 2025 réservées au test final (évaluation 2025)
+    "ventes_test_2025": {
+        "type": "fichier",
+        "id": "1ck8FkUyuMJIqSs6QvywidtEPeDFN4Rux",
+        "nom": "ventes_test_2025.parquet",
+        "dossier": DATA_OUT,
+    },
+    # Réglages optimisés du réseau Keras (résultat de l'optimisation de H7, déjà faite)
+    "reglages_keras": {
+        "type": "fichier",
+        "id": "1RuuyLoebt0faZnt6jt4C0t2PqOE_wy9f",
+        "nom": "meilleurs_reglages_keras.json",
         "dossier": DATA_OUT,
     },
     "filosofi": {
@@ -175,6 +235,12 @@ SOURCES = {
 }
 
 
+# Groupes de sources : un mot-clé en ligne de commande qui en remplace plusieurs
+PARCOURS_COURT = ["table_modelisation", "filosofi_commune", "liaison_bv_scindes", "taux_credit_mois",
+                  "fe_capacite_achat", "fe_volume_elan", "ventes_apprentissage", "ventes_test_2025", "reglages_keras"]
+GROUPES = {"parcours_court": PARCOURS_COURT}
+
+
 # -----------------------------------------------------------------------------
 # 2. Fonction de téléchargement d'une source
 # -----------------------------------------------------------------------------
@@ -232,11 +298,17 @@ if __name__ == "__main__":
         print("Sources disponibles :")
         for cle, source in SOURCES.items():
             print(f"  {cle:<22} -> {source['nom']}")
+        print("\nGroupes :")
+        print(f"  {'tout':<22} -> toutes les sources ci-dessus")
+        for nom, cles in GROUPES.items():
+            print(f"  {nom:<22} -> {len(cles)} fichiers : {', '.join(cles)}")
         print("\nExemple : python 00_telechargement/telechargement.py dvf taux")
         sys.exit(0)
 
     if demandes == ["tout"]:
         demandes = list(SOURCES)
+    # Un groupe (parcours_court) est remplacé par ses sources, sans doublon
+    demandes = list(dict.fromkeys(cle for d in demandes for cle in GROUPES.get(d, [d])))
 
     # Vérifie les noms avant de lancer quoi que ce soit
     inconnues = [cle for cle in demandes if cle not in SOURCES]

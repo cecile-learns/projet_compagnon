@@ -1,0 +1,27 @@
+# Installation du socle (modules partagés par les notebooks et les scripts) :
+#   pip install -e .        (depuis la racine du projet, une seule fois)
+# Ensuite, « from commun import ... » ou « from gabarit_pont import ... » fonctionne
+# depuis n'importe quel dossier. Le mode -e (éditable) est nécessaire : le socle lit
+# config.py et data/ à la racine du projet.
+# Les dépendances restent dans requirements.txt (pip install -r requirements.txt).
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "compagnon-immobilier"
+version = "1.0.0"
+description = "Socle de modélisation du projet Compagnon Immobilier (prix immobiliers, DVF+)"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+package-dir = {"" = "socle"}
+py-modules = ["commun", "gabarit_boosting", "gabarit_hierarchique", "gabarit_keras", "gabarit_pont"]
+
+# Tests : « pytest » depuis la racine du projet (aucune installation nécessaire pour les tests)
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["socle"]
+# Seules les fonctions test_* sont des tests (commun.py a des fonctions tester, tester_ventes)
+python_functions = ["test_*"]
