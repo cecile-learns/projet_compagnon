@@ -28,8 +28,18 @@ Thumbs.db
 # Sorties produites par les scripts
 02_audit_eda/figures/
 
+# Suivi MLflow (la base du parcours court est dans data/processed/, déjà exclue ; au cas où une base
+# serait créée ailleurs, par exemple à la racine)
+mlflow.db
+mlruns/
+mlartifacts/
+
 # Exports et conversions
 *.docx
 *.pdf
 *.html
 *_files/
+# Installation éditable du socle (pip install -e .)
+*.egg-info/
+build/
+.pytest_cache/
