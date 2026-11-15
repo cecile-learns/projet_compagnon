@@ -36,9 +36,7 @@ projet_compagnon/
 │   └── telechargement.py           ← téléchargement des sources depuis le Google Drive
 ├── 01_preparation/
 │   ├── preparation.py              ← préparation des sources, 12 blocs lançables un par un
-│   ├── preparation.ipynb           ← même préparation, avec les explications
-│   ├── feature_engineering.py      ← table de modélisation, 11 sections lançables une par une
-│   └── feature_engineering.ipynb   ← même construction, avec les constats et justifications
+│   └── feature_engineering.py      ← table de modélisation, 11 sections lançables une par une
 ├── 02_audit_eda/
 │   ├── 1_audits_sources.ipynb               ← audit de chaque source brute
 │   ├── 1_eda_sources.ipynb                  ← analyse exploratoire des sources : cible, relations, synthèse
@@ -72,9 +70,10 @@ Les rapports (rédigés en Word, remis en PDF) sont tenus à part, sur le Google
 
 ## Installation
 
-Depuis la racine du projet, environnement virtuel activé :
+Depuis la racine du projet, dans un environnement virtuel (Python 3.12) :
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate   # une seule fois, puis « source .venv/bin/activate » à chaque session
 pip install -r requirements.txt   # dépendances
 pip install -e .                  # socle : rend « from commun import ... » disponible partout
 ```
@@ -83,7 +82,7 @@ pip install -e .                  # socle : rend « from commun import ... » di
 
 Toutes les commandes se lancent depuis la racine du projet.
 
-## Parcours court (examinateur pressé)
+## Parcours court
 
 Un seul fichier lance l'ensemble, depuis la racine du projet, environnement virtuel activé :
 
@@ -148,7 +147,7 @@ python 01_preparation/preparation.py 5 6 9      # seulement ces blocs
 python 01_preparation/preparation.py liste      # liste des blocs
 ```
 
-Chaque bloc lit ses entrées dans `data/raw/` (ou les fichiers d'un bloc précédent dans `data/processed/`) et écrit les siens. Un bloc qui a besoin du résultat d'un autre le dit et s'arrête, avec la commande à lancer d'abord. Les explications sont dans `01_preparation/preparation.ipynb`.
+Chaque bloc lit ses entrées dans `data/raw/` (ou les fichiers d'un bloc précédent dans `data/processed/`) et écrit les siens. Un bloc qui a besoin du résultat d'un autre le dit et s'arrête, avec la commande à lancer d'abord. Les explications sont en commentaire dans `preparation.py`, en tête de chaque bloc.
 
 ### 3. Audits et analyse exploratoire
 
@@ -167,11 +166,11 @@ python 01_preparation/feature_engineering.py 3 3bis     # seulement ces sections
 python 01_preparation/feature_engineering.py liste      # liste des sections
 ```
 
-Les constats de l'EDA qui justifient chaque choix sont dans `01_preparation/feature_engineering.ipynb`. Le `.py` est la version de référence : toute modification se fait dans les deux.
+Les choix sont expliqués en commentaire dans `feature_engineering.py` ; les constats de l'EDA qui les justifient sont dans les notebooks de `02_audit_eda`.
 
 Pour chaque source : rattachement des communes aux sous-bassins, agrégation, jointure à gauche sur la cible, export `fe_cible_<source>_sbv.parquet`. Puis fusion des sources et construction de `table_modelisation_bv.parquet` (voir plus bas).
 
-**Raccourci (examinateur)** : la table de modélisation déjà construite peut être téléchargée directement, sans relancer la préparation ni le feature engineering :
+**Raccourci** : la table de modélisation déjà construite peut être téléchargée directement, sans relancer la préparation ni le feature engineering :
 
 ```bash
 python 00_telechargement/telechargement.py table_modelisation

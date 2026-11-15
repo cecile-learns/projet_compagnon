@@ -22,7 +22,7 @@ from config import DATA_OUT
 
 CIBLE = "prix"               # niveau du prix médian au m² (décision du 26/10)
 ANNEE_DEBUT = 2020           # première année d'apprentissage (période arrêtée le 23/10)
-ANNEE_VALIDATION = 2024      # réglage des modèles
+ANNEE_VALIDATION = 2024      # dernière année avant le test : année évaluée par défaut dans decouper, borne des analyses (2025 exclue)
 ANNEE_TEST = 2025            # évaluation finale, une seule fois
 FICHIER_TABLE = DATA_OUT / "table_modelisation_bv.parquet"
 N_TIRAGES = 1000             # nombre de tirages du bootstrap
@@ -37,7 +37,7 @@ N_ANNEES_MIN_PLI = 1          # années d'apprentissage minimales par pli (déci
 # - cible et comptages de ventes ;
 # - variables de contrôle qualité (hors modèle, voir 1.4 de la feuille de route) ;
 # - 'annee' et 'maison' : identifiants ; 'BV2022' : bassin de vie, identifiant du bootstrap de tester (P2).
-# À COMPLÉTER PAR L'ÉQUIPE : les variables non retenues (ex. structure des ménages)
+# Toute autre colonne de la table est une variable explicative : une case vide y retire la ligne (masque commun).
 # doivent être ajoutées ici, sinon une case vide dans l'une d'elles retirerait des lignes pour rien.
 HORS_MASQUE = ["annee", "maison", CIBLE, "n_ventes", "nb_ventes_n1",
                "part_indicateurs_estimes", "part_logements_taux_impute", "part_menages_couverts",
