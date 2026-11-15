@@ -38,7 +38,7 @@ N_ANNEES_MIN_PLI = 1          # années d'apprentissage minimales par pli (déci
 # - variables de contrôle qualité (hors modèle, voir 1.4 de la feuille de route) ;
 # - 'annee' et 'maison' : identifiants ; 'BV2022' : bassin de vie, identifiant du bootstrap de tester (P2).
 # Toute autre colonne de la table est une variable explicative : une case vide y retire la ligne (masque commun).
-# doivent être ajoutées ici, sinon une case vide dans l'une d'elles retirerait des lignes pour rien.
+
 HORS_MASQUE = ["annee", "maison", CIBLE, "n_ventes", "nb_ventes_n1",
                "part_indicateurs_estimes", "part_logements_taux_impute", "part_menages_couverts",
                "BV2022"]
