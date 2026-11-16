@@ -56,7 +56,7 @@ projet_compagnon/
 │   ├── 2_prepa_tour2/              ← scripts P6, P7, P9 : préparations propres au tour 2
 │   ├── 3_tour2/                    ← H4 (pont), H5 (volume et élan), H6 (capacité d'achat), H5-H6 (comparaison), H7 (modèle par vente)
 │   └── 4_evaluation_2025/          ← test final sur 2025, ouvert une seule fois : deux scripts, puis un notebook qui compare les résultats
-├── 04_outils/                      ← modèle final et lignes d'entrée de l'outil
+├── 04_outils/                      ← modèle final, lignes d'entrée et ventes comparables de l'outil
 └── 05_application/                 ← application Streamlit
 ```
 
@@ -225,9 +225,10 @@ python 04_outils/fourchette_h7v4.py          # fourchette d'erreur, tirée du te
 python 04_outils/modele_final_h7v4.py        # modèle final (appris sur toutes les années)
 python 04_outils/controle_lignes_2025.py     # contrôle de la construction des lignes sur 2025
 python 04_outils/produire_lignes_2026.py     # lignes d'entrée de 2026
+python 04_outils/produire_ventes_comparables.py   # ventes 2023-2025 pour les ventes comparables et la fourchette de l'outil
 ```
 
-`lignes_annee.py` n'est pas à lancer : il contient la construction des lignes, utilisée par les deux derniers scripts. `fourchette_h7v4.py`, `modele_final_h7v4.py` et `produire_lignes_2026.py` refusent d'écraser un fichier qu'ils ont déjà produit.
+`lignes_annee.py` n'est pas à lancer : il contient la construction des lignes, utilisée par les deux derniers scripts. `fourchette_h7v4.py`, `modele_final_h7v4.py`, `produire_lignes_2026.py` et `produire_ventes_comparables.py` refusent d'écraser un fichier qu'ils ont déjà produit.
 
 ### 7. Application
 

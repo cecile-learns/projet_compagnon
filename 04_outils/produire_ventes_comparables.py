@@ -9,8 +9,8 @@
 # Colonnes : code_commune, nom_commune, sous_bassin_de_vie, nom_sous_bassin, BV2022, nom_bassin,
 #            type_bien (maison / appartement), annee, mois, sbati, nb_pieces, sterr, prix_m2.
 # Prérequis (voir preparation.py) : bloc 1 (liaison commune -> bassin de vie) et bloc 2 (population DVF+).
-# Pour ajouter janvier-juin 2026 : même script, avec le fichier DVF+ 2026 filtré par le bloc 2 (même format),
-# en changeant ANNEE_FIN et FICHIER_POP.
+# Le DVF+ 2026 n'entre pas dans le projet : ne pas changer ANNEE_FIN ni FICHIER_POP.
+# Le script refuse d'écraser un fichier déjà produit.
 # Lancement, depuis la racine du projet :  python 04_outils/produire_ventes_comparables.py
 
 from pathlib import Path

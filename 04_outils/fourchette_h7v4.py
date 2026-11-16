@@ -18,7 +18,9 @@
 #
 # Produit (data/processed) :
 #   previsions_2025_h7v4.parquet : une ligne par vente 2025 (prix réel, prévision, erreur, poids)
-#   fourchette_h7v4.json         : bornes basse et haute de l'erreur, par type de bien (lu par estimer())
+#   fourchette_h7v4.json         : bornes basse et haute de l'erreur, par type de bien (lu par modele_final_h7v4.py,
+#                                  qui la recopie dans h7v4_parametres.json ; l'outil affiche la fourchette des
+#                                  prix de biens similaires, pas cette fourchette d'erreur)
 # Lancement, depuis la racine du projet :  python 04_outils/fourchette_h7v4.py
 # Durée : deux entraînements du réseau (2024 puis 2025).
 
