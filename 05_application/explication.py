@@ -1,5 +1,5 @@
 # =============================================================================
-# 05_application/explication.py : expliquer(estimation, comparables), bloc C (Théophyle)
+# 05_application/explication.py : expliquer() et expliquer_llm(), bloc C (Théophyle)
 # =============================================================================
 # Pourquoi : la page Outil affiche des chiffres (prix estimé, contexte du secteur, fourchette, ventes proches).
 # expliquer() les reprend en un court paragraphe, lisible par un particulier.
@@ -19,6 +19,11 @@
 #   - toujours rappeler la limite du modèle.
 #
 # Vérification : python explication.py (depuis 05_application), sur des cas inventés.
+
+import os
+import re
+
+import streamlit as st
 
 import contrats
 
@@ -83,11 +88,7 @@ def phrase_fourchette(estimation, comparables):
              + " « " + f["lieu"] + " » : pour " + str(contrats.PART_FOURCHETTE) + " % d'entre eux, le prix "
              + "était compris entre " + euros(f["basse_m2"]) + " et " + euros(f["haute_m2"]) + " par m²")
 
-    # Traduction en € pour la surface du bien : surface = prix total / prix au m² (chiffres reçus)
-    if estimation["prix_m2"] is not None:
-        surface = estimation["prix_total"] / estimation["prix_m2"]
-        texte = (texte + ", soit de " + euros(f["basse_m2"] * surface) + " à " + euros(f["haute_m2"] * surface)
-                 + " pour la même surface")
+  
     texte = texte + "."
 
     # Place de l'estimation : le modèle et les ventes passées peuvent ne pas concorder
@@ -131,6 +132,90 @@ def expliquer(estimation, comparables):
         if morceau:
             texte = texte + morceau + " "
     return texte.strip()
+
+
+# =============================================================================
+# expliquer_llm(estimation, comparables) : la même explication, rédigée par un modèle de langage (Groq)
+# =============================================================================
+# Principe (plan de développement, partie « génération » du RAG) : le modèle de langage ne calcule rien.
+# Il reçoit le texte de expliquer() comme seule source de faits, et le reformule de façon plus naturelle.
+#
+# Garde-fous :
+#   - consigne stricte : n'utiliser que les faits fournis, aucun chiffre nouveau, aucune adresse, garder la limite ;
+#   - contrôle après coup : chaque nombre du texte rédigé doit figurer dans les faits ; sinon, on jette le texte ;
+#   - repli automatique sur expliquer() en cas d'erreur, de délai trop long, de clé absente ou de texte refusé ;
+#   - même saisie, même résultat : température 0 et réponse gardée en mémoire (cache) pour un même texte de faits ;
+#   - la clé n'est jamais dans le code : elle est lue dans les secrets de Streamlit
+#     (05_application/.streamlit/secrets.toml en local, exclu de Git ; les « secrets » de l'hébergeur en ligne),
+#     ou à défaut dans la variable d'environnement GROQ_API_KEY.
+
+MODELE = "openai/gpt-oss-120b"       # modèle de Groq ; vérifier sur console.groq.com qu'il est toujours proposé
+DELAI_MAX = 10                       # secondes ; au-delà, on se replie sur la phrase type
+
+CONSIGNE = (
+    "Tu rédiges, en français, l'explication d'une estimation immobilière pour un particulier qui veut acheter "
+    "un logement. On te donne des FAITS déjà calculés. Règles strictes :\n"
+    "1. N'utilise que les faits fournis. N'ajoute aucun chiffre, aucune date, aucun pourcentage, aucun nom de lieu "
+    "qui n'y figure pas, et ne refais aucun calcul.\n"
+    "2. Recopie les nombres exactement comme dans les faits (mêmes chiffres, mêmes espaces, mêmes unités).\n"
+    "3. Ne donne aucune adresse, aucune rue, aucun conseil d'achat ou d'investissement.\n"
+    "4. Garde la limite du modèle (il n'anticipe pas un retournement du marché).\n"
+    "5. Un seul paragraphe de 4 à 6 phrases, vouvoiement, ton clair et neutre, sans liste ni titre."
+)
+
+
+def lire_cle():
+    """Clé Groq : secrets de Streamlit, sinon variable d'environnement ; None si absente."""
+    try:
+        cle = st.secrets["GROQ_API_KEY"]
+    except Exception:          # pas de fichier de secrets, ou clé absente du fichier
+        cle = os.environ.get("GROQ_API_KEY")
+    return cle or None
+
+
+def nombres(texte):
+    """Nombres d'un texte, écrits sans espaces : « 315 000 € » -> « 315000 », « +1,5 % » -> « 1,5 »."""
+    trouves = re.findall(r"\d[\d   ]*(?:,\d+)?", texte)
+    resultat = set()
+    for n in trouves:
+        resultat.add(n.replace(" ", "").replace(" ", "").replace(" ", ""))
+    return resultat
+
+
+def texte_fidele(texte, faits):
+    """Vrai si chaque nombre du texte rédigé figure dans les faits (contrôle « explication fidèle »)."""
+    return nombres(texte) <= nombres(faits)
+
+
+@st.cache_data(show_spinner=False)
+def rediger(faits):
+    """Appel à Groq ; renvoie le texte rédigé, ou None en cas de problème (le repli est fait par l'appelant)."""
+    cle = lire_cle()
+    if cle is None:
+        return None
+    try:
+        from groq import Groq     # importé ici : sans la bibliothèque, l'outil marche quand même (phrase type)
+        client = Groq(api_key=cle, timeout=DELAI_MAX, max_retries=0)
+               # gpt-oss « réfléchit » avant de répondre : réflexion courte (rapide), et assez de jetons pour la réflexion + le texte
+        reponse = client.chat.completions.create(
+            model=MODELE, temperature=0, max_tokens=1500, reasoning_effort="low",
+            messages=[{"role": "system", "content": CONSIGNE},
+                      {"role": "user", "content": "FAITS :\n" + faits}])
+        texte = reponse.choices[0].message.content.strip()
+    except Exception:              # réseau, délai, clé refusée, quota, bibliothèque absente...
+        return None
+    if not texte or not texte_fidele(texte, faits):
+        return None
+    return texte
+
+
+def expliquer_llm(estimation, comparables):
+    """Explication rédigée par Groq à partir de la phrase type ; la phrase type elle-même en cas de problème."""
+    faits = expliquer(estimation, comparables)
+    texte = rediger(faits)
+    if texte is None:
+        return faits
+    return texte
 
 
 # -----------------------------------------------------------------------------
@@ -181,4 +266,17 @@ if __name__ == "__main__":
 
     # Même saisie, même résultat
     assert expliquer(estimation, proches) == expliquer(estimation, proches)
+
+    # Contrôle de fidélité : un nombre inventé fait rejeter le texte rédigé
+    faits = expliquer(estimation, proches)
+    assert texte_fidele("Ce bien est estimé à 315 000 € en 2026.", faits)
+    assert not texte_fidele("Ce bien est estimé à 320 000 € en 2026.", faits)
+
+    # Version Groq (si la clé est trouvée) : texte rédigé, ou phrase type en repli
+    print("\nClé Groq trouvée :", lire_cle() is not None)
+    texte_llm = contrats.verifier_format("expliquer_llm", expliquer_llm(estimation, proches))
+    if texte_llm == faits:
+        print("expliquer_llm : repli sur la phrase type (pas de clé, erreur, délai ou texte non fidèle).")
+    else:
+        print("expliquer_llm, texte rédigé par Groq :\n" + texte_llm)
     print("\nContrôles réussis.")

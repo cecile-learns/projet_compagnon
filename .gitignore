@@ -43,3 +43,6 @@ mlartifacts/
 *.egg-info/
 build/
 .pytest_cache/
+
+# Clé Groq : jamais dans Git
+05_application/.streamlit/secrets.toml

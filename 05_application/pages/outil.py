@@ -164,9 +164,7 @@ else:
              + " ventes** de biens équivalents (" + fourchette["niveau"] + ") ont eu lieu dans le "
              + fourchette["echelle"] + " « " + fourchette["lieu"] + " ». Pour " + str(contrats.PART_FOURCHETTE)
              + " % d'entre elles, le prix au m² était compris entre **" + euros(basse) + "** et **"
-             + euros(haute) + "**, soit **"
-             + euros(basse * bien["sbati"]) + " à " + euros(haute * bien["sbati"]) + "** pour "
-             + nombre(bien["sbati"]) + " m².")
+             + euros(haute) + "**.")
     # L'estimation vient du modèle, la fourchette des ventes passées : elles peuvent ne pas concorder
     if estimation["prix_m2"] is not None:
         if estimation["prix_m2"] > haute:
@@ -198,7 +196,7 @@ else:
         tableau, hide_index=True, use_container_width=True,
         column_config={
             "commune": st.column_config.TextColumn("Commune"),
-            "date": st.column_config.DateColumn("Date de vente", format="DD/MM/YYYY"),
+            "date": st.column_config.DateColumn("Date de vente", format="MM/YYYY"),   # DVF+ ne donne que le mois,
             "sbati": st.column_config.NumberColumn("Surface (m²)", format="%.0f"),
             "nb_pieces": st.column_config.NumberColumn("Pièces", format="%d"),
             "sterr": st.column_config.NumberColumn("Terrain (m²)", format="%.0f"),
