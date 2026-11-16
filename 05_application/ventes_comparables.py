@@ -41,11 +41,12 @@ MIN_VENTES_PROCHES = 5          # en dessous, recherche des ventes proches élar
 
 # Niveaux de la fourchette, du plus précis au plus large : (échelle, pièces)
 #   pièces : "même" (même nombre de pièces), "±1" (une pièce de plus ou de moins), "toutes"
-# ORDRE À CONFIRMER AVEC CÉCILE pour les appartements : ici, on élargit la taille avant le lieu.
-NIVEAUX_APPARTEMENT = [("sous-bassin", "même"), ("sous-bassin", "±1"),
+# Ordre validé avec Cécile par le test du 16/11 : changer de taille élargit peu la fourchette (quelques points),
+# changer de lieu peut l'élargir beaucoup (Paris 8e : 67 % -> 115 % en passant à tout Paris).
+# On reste donc dans le sous-bassin, toutes tailles comprises, avant de passer au bassin de vie.
+NIVEAUX_APPARTEMENT = [("sous-bassin", "même"), ("sous-bassin", "±1"), ("sous-bassin", "toutes"),
                        ("bassin de vie", "même"), ("bassin de vie", "±1"), ("bassin de vie", "toutes")]
 NIVEAUX_MAISON = [("sous-bassin", "toutes"), ("bassin de vie", "toutes")]   # la taille joue peu sur le prix au m²
-
 
 # -----------------------------------------------------------------------------
 # 1. Lecture et sélection des ventes
@@ -155,7 +156,9 @@ def fourchette_equivalents(ventes, bien, lieu):
             part_hors = (100 - PART_FOURCHETTE) / 2 / 100          # 12,5 % de chaque côté
             nom_lieu = secteur["nom_sous_bassin" if echelle == "sous-bassin" else "nom_bassin"].astype(str).iloc[0]
             return {"nb_ventes": int(len(secteur)), "niveau": nom_niveau(type_bien, pieces, classe),
-                    "echelle": echelle, "lieu": nom_lieu,
+                                        # bassin non découpé : sous-bassin = bassin, on ne parle pas d'élargissement
+                    "echelle": "sous-bassin" if lieu["sous_bassin_de_vie"] == lieu["bassin_de_vie"] else echelle,
+                    "lieu": nom_lieu,
                     # bornes arrondies à la dizaine d'euros : pas de fausse précision
                     "basse_m2": float(round(secteur["prix_m2"].quantile(part_hors), -1)),
                     "haute_m2": float(round(secteur["prix_m2"].quantile(1 - part_hors), -1))}
