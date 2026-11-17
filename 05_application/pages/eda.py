@@ -430,7 +430,7 @@ with onglets[2]:
                     alsace = [c for c in ("57", "67", "68") if any(d.startswith(c + " ") for d in sans_valeur)]
                     st.caption("Six classes de même effectif, bornes en €/m² : " + " | ".join(fr(v) for v in bornes) + ". En gris : "
                                + str(len(sans_valeur)) + " départements sans valeur"
-                               + (", dont l'Alsace-Moselle, absente de DVF+" if alsace else "")
+                               + (", dont l'Alsace-Moselle, quasi absente de DVF+" if alsace else "")
                                + ". Survole un département pour voir son prix, ses sous-bassins et ses ventes.")
             with droite:
                 maxi = float(haut["prix"])
