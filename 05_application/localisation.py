@@ -21,7 +21,7 @@
 # liste_communes() : la liste déroulante de la page Outil (« Bordeaux (33000) » -> code INSEE).
 #
 # Données : donnees/communes_sous_bassins.parquet et donnees/communes_recherche.parquet, produits par
-# 01_preparation/preparer_communes_app.py.
+# 04_outils/preparer_communes_app.py.
 # Vérification : python localisation.py (depuis 05_application).
 
 import pandas as pd

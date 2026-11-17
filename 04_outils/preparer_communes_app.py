@@ -1,5 +1,5 @@
 # =============================================================================
-# 01_preparation/preparer_communes_app.py : tables des communes pour l'application (page Outil)
+# 04_outils/preparer_communes_app.py : tables des communes pour l'application (page Outil)
 # =============================================================================
 # Pourquoi : l'application en ligne n'a pas accès à data/ ; elle lit des copies réduites, placées dans
 # 05_application/donnees/. Ce script en produit deux, toutes deux liées aux communes :
@@ -23,7 +23,7 @@
 #      - France métropolitaine seulement (périmètre de l'outil, plan de développement).
 #      - Deux communes de même nom et même code postal (cas rare) : le code INSEE est ajouté au libellé.
 #
-# À lancer depuis la racine du projet :  python 01_preparation/preparer_communes_app.py
+# À lancer depuis la racine du projet :  python 04_outils/preparer_communes_app.py
 # Entrées : data/processed/liaison_bv_scindes.parquet, data/raw/communes-france-2026.csv
 # Sorties : 05_application/donnees/communes_sous_bassins.parquet, communes_recherche.parquet
 
