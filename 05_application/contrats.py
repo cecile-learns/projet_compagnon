@@ -186,7 +186,7 @@ def verifier_format(nom, resultat):
 # 4. Branchement : provisoire ou vraie fonction
 # -----------------------------------------------------------------------------
 # Passer un interrupteur à True quand la vraie fonction est livrée (annoncé à l'équipe).
-BRANCHEES = {"localiser": False, "estimer": False, "comparables": False, "expliquer": False, "expliquer_llm": False}
+BRANCHEES = {"localiser": True, "estimer": True, "comparables": True, "expliquer": True, "expliquer_llm": True}
 
 
 def localiser(commune):

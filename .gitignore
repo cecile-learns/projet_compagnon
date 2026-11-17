@@ -25,6 +25,12 @@ Thumbs.db
 *.prj
 *.cpg
 
+# Exception : les données de l'application vont dans Git (décision du 17/11).
+# Elles sont produites par les scripts de 04_outils et l'application en ligne ne fonctionne pas sans elles.
+# Strict nécessaire : seuls les fichiers lus par l'application sont placés dans ce dossier.
+!05_application/donnees/*.parquet
+!05_application/donnees/*.csv
+
 # Sorties produites par les scripts
 02_audit_eda/figures/
 
