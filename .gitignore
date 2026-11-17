@@ -1,6 +1,7 @@
 # Environnements virtuels
 .venv/
 .cienv/
+.env_py312
 
 # Fichiers techniques Python / Jupyter / système
 __pycache__/
