@@ -40,7 +40,14 @@ def liste_communes():
         return charger_parquet("communes_recherche.parquet")
     except FileNotFoundError:
         return None
-
+    
+@st.cache_data
+def noms_sous_bassins():
+    """Code du sous-bassin -> nom lisible (« 33063_1 » -> « Bordeaux (centres) »), tiré des ventes comparables.
+    Calculé une seule fois : le petit dictionnaire est gardé en mémoire."""
+    ventes = charger_parquet("ventes_comparables.parquet")
+    paires = ventes[["sous_bassin_de_vie", "nom_sous_bassin"]].astype(str).drop_duplicates("sous_bassin_de_vie")
+    return paires.set_index("sous_bassin_de_vie")["nom_sous_bassin"].to_dict()
 
 # -----------------------------------------------------------------------------
 # 2. En-tête et options de la colonne de gauche
@@ -158,8 +165,11 @@ with onglet_estimer:
                 evolution = format(contexte["evolution_pct"], "+.1f").replace(".", ",") + " % sur un an"
             colonnes[2].metric("Prix médian 2025 du secteur, au m²", euros(contexte["prix_median_2025"]),
                             delta=evolution, delta_color="off")
-            st.caption("Secteur : sous-bassin de vie " + estimation["sous_bassin_de_vie"] + ", "
-                    + nombre(contexte["nb_ventes_2025"]) + " ventes en 2025.")
+            # Nom lisible du secteur ; le code seulement si le nom est introuvable
+            code_secteur = estimation["sous_bassin_de_vie"]
+            nom_secteur = noms_sous_bassins().get(code_secteur, code_secteur)
+            st.caption("Secteur : sous-bassin « " + nom_secteur + " », "
+                       + nombre(contexte["nb_ventes_2025"]) + " ventes en 2025.")
 
 
     # -----------------------------------------------------------------------------

@@ -27,12 +27,19 @@
 import pandas as pd
 
 from commun_app import charger_parquet
+from functools import lru_cache 
 
 FICHIER = "communes_sous_bassins.parquet"
 FICHIER_RECHERCHE = "communes_recherche.parquet"
 
 # Villes suivies arrondissement par arrondissement : le code de la ville entière ne suffit pas
 VILLES_A_ARRONDISSEMENTS = {"75056": "Paris", "69123": "Lyon", "13055": "Marseille"}
+
+# Alsace-Moselle (Moselle, Bas-Rhin, Haut-Rhin) : absente de DVF (publicité foncière au livre foncier).
+# Ni ventes ni estimation. Même liste que DEPARTEMENTS_NON_COUVERTS dans estimation.py (Cécile).
+DEPARTEMENTS_NON_COUVERTS = ("57", "67", "68")
+
+@lru_cache(maxsize=1)      # table indexée une seule fois, puis gardée en mémoire (charger_parquet renvoie une copie)
 
 
 def _table_communes():
@@ -44,6 +51,16 @@ def _non_localisee(commune, message):
     """Réponse quand la commune n'est pas localisée : codes vides et message."""
     return {"commune": commune, "sous_bassin_de_vie": None, "bassin_de_vie": None, "message": message}
 
+@lru_cache(maxsize=1)     # calculé une seule fois, puis gardé en mémoire : la liste des secteurs ne change pas
+
+
+def _secteurs_avec_alsace_moselle():
+    """Codes des sous-bassins et des bassins de vie qui contiennent au moins une commune d'Alsace-Moselle."""
+    table = charger_parquet(FICHIER)
+    dans_zone = table["code_commune"].astype(str).str[:2].isin(DEPARTEMENTS_NON_COUVERTS)
+    sous_bassins = set(table.loc[dans_zone, "sous_bassin_de_vie"].dropna().astype(str))
+    bassins = set(table.loc[dans_zone, "BV2022"].dropna().astype(str))
+    return sous_bassins, bassins
 
 def localiser(commune):
     """Code INSEE de la commune (texte de 5 caractères) -> sous-bassin et bassin de vie."""
@@ -66,17 +83,31 @@ def localiser(commune):
     if code not in table.index:
         return _non_localisee(code, "Commune inconnue : vérifiez la commune choisie.")
     ligne = table.loc[code]
+    # 4. Alsace-Moselle : pas de ventes dans DVF, donc ni estimation ni ventes comparables
+    if str(ligne["code_commune"])[:2] in DEPARTEMENTS_NON_COUVERTS:
+        return _non_localisee(code, "Commune d'Alsace ou de Moselle : non couverte par DVF "
+                                    "(la publicité foncière y relève du livre foncier). Pas d'estimation possible.")
 
     # 4. Commune sans territoire (cas très rare, signalé plutôt que de renvoyer une case vide)
     if pd.isna(ligne["sous_bassin_de_vie"]) or pd.isna(ligne["BV2022"]):
         return _non_localisee(code, "Cette commune n'est rattachée à aucun bassin de vie : "
                                     "pas d'estimation possible.")
 
-    return {"commune": str(ligne["code_commune"]),
-            "sous_bassin_de_vie": str(ligne["sous_bassin_de_vie"]),
-            "bassin_de_vie": str(ligne["BV2022"]),
-            "message": None}
+    # 6. Secteur à cheval sur l'Alsace-Moselle : estimation normale, mais le nom du secteur peut être celui
+    #    d'une ville sans aucune vente dans DVF (par exemple « Metz (espaces ruraux) » pour une commune de 54)
+    sous_bassin = str(ligne["sous_bassin_de_vie"])
+    bassin = str(ligne["BV2022"])
+    message = None
+    sous_bassins_mixtes, bassins_mixtes = _secteurs_avec_alsace_moselle()
+    if sous_bassin in sous_bassins_mixtes or bassin in bassins_mixtes:
+        message = ("Ce secteur compte aussi des communes d'Alsace-Moselle, absentes de DVF : les prix et les "
+                   "ventes affichés viennent seulement des autres communes, même si le nom du secteur est "
+                   "celui d'une ville d'Alsace-Moselle.")
 
+    return {"commune": str(ligne["code_commune"]),
+            "sous_bassin_de_vie": sous_bassin,
+            "bassin_de_vie": bassin,
+            "message": message}
 
 def liste_communes():
     """Communes proposées dans la page Outil : colonnes libelle (« Bordeaux (33000) ») et code_insee.
@@ -115,6 +146,8 @@ if __name__ == "__main__":
     print(communes[communes["libelle"].str.startswith(("Bordeaux", "Paris 8e"))].to_string(index=False))
     sans_territoire = 0
     for code in communes["code_insee"]:
+        if str(code)[:2] in DEPARTEMENTS_NON_COUVERTS:
+            continue          # Alsace-Moselle : volontairement sans sous-bassin (message « non couverte par DVF »)
         if localiser(code)["sous_bassin_de_vie"] is None:
             sans_territoire = sans_territoire + 1
     print("Communes proposées sans territoire :", sans_territoire)
