@@ -448,29 +448,22 @@ def onglet_deux_niveaux():
 
     st.markdown("#### Chaque hypothèse ajoute un bloc, et se compare à deux références")
     st.table(pd.DataFrame([
-        ("H3a · attractivité", "Densité, équipements, délinquance", "Prix N-1 seul"),
-        ("H3b · logement et ménages", "Parc de logements, vacance, ménages, revenus", "Prix N-1 seul"),
-        ("H3c · emploi", "Évolution de l'emploi salarié privé en N-1", "Prix N-1 seul"),
-        ("H4 · pont", "Rien : le modèle complet est appris dès 2017", "Niveau 1 appris dès 2020"),
-        ("H5 · volume et élan", "Nombre de ventes, rotation du parc, élan des prix", "Modèle pont"),
-        ("H6 · capacité d'achat", "Taux d'effort : mensualité d'un achat type rapportée au revenu", "Modèle pont"),
-        ("H7 · prix de chaque vente", "Le bien (surface, pièces, terrain), le sous-bassin, le prix N-1, puis le « quand »",
+        ("H1", "Le territoire explique l'essentiel des écarts de prix avec les autres.","", "EDA"),
+        ("H2", "Les caractéristiques lentes d'un territoire peuvent être prises à un seul millésime" ," ", "EDA"),
+        ("H3", "Ajouté au prix N-1, le territoire n'apporte qu'un petit gain de prévision","Densité, équipements, délinquance", "Prix N-1 seul"),
+        ("H3a", "L'attractivité d'un territoire améliore la prévision du prix.","Densité, équipements, délinquance", "Prix N-1 seul"),
+        ("H3b", "Le parc de logements, la vacance, les ménages et les revenus améliore la prévision?" ,"Parc de logements, vacance, ménages, revenus", "Prix N-1 seul"),
+        ("H3c", "L'évolution de l'emploi améliore la prévision des prix","Évolution de l'emploi salarié privé en N-1", "Prix N-1 seul"),
+        ("H4","Apprendre sur plusieurs phases du marché réduit l'erreur systématique du modèle et rend les variables de territoires plus utiles" ,"Rien : le modèle complet est appris dès 2017", "Niveau 1 appris dès 2020"),
+        ("H5","Le volume de ventes et l'élan récent des prix annoncent le sens de l'évolution", "Nombre de ventes, rotation du parc, élan des prix", "Modèle pont"),
+        ("H6", "La capacité d'achat locale, c'est à dire la mensualité d'un achat type rapportée au revenu, améliore la prévision", "Taux d'effort : mensualité d'un achat type rapportée au revenu", "Modèle pont"),
+        ("H7","Prévoir le prix de chaque vente plutôt que la médiane du territoire fait mieux à information égale", "Le bien (surface, pièces, terrain), le sous-bassin, le prix N-1, puis le « quand »",
          "Naïve du sous-bassin ; Elastic Net par vente"),
-    ], columns=["Hypothèse", "Ce qui est ajouté", "Comparé à"]).set_index("Hypothèse"))
+    ], columns=["Référence","Hypothèse", "Ce qui est ajouté", "Comparé à"]).set_index("Référence"))
     st.caption("Chaque modèle est comparé à la naïve, pour répondre à la question de recherche, et au modèle de l'étape "
                "précédente, pour isoler l'apport du bloc : seul le bloc change.")
 
-    with st.expander("Les modèles et le code partagé"):
-        st.write("Les modèles vont du plus simple au plus complexe : régressions régularisées (Ridge, Lasso, Elastic Net), "
-                 "modèle hiérarchique, arbres et gradient boosting, puis réseau de neurones Keras pour le modèle par vente.")
-        st.write("Pour que deux hypothèses ne diffèrent que par leurs variables, tout ce qui doit être identique est écrit "
-                 "une seule fois : `commun.py` (table, fenêtres, naïve, mesures, tests) et quatre gabarits de modèle "
-                 "(boosting, hiérarchique, pont, Keras), contrôlés par des tests sur données inventées.")
-        st.write("Tous les modèles sont conservés et rapportés, y compris ceux qui perdent. Le travail se relit par les "
-                 "notebooks (parcours long) ou par un seul script tracé dans MLflow (parcours court).")
-    retenir("le niveau 1 mesure ce que le territoire apporte, le niveau 2 cherche des signaux qui changent chaque année, "
-            "et chaque étape est jugée contre la même référence.")
-
+    
 
 def onglet_fenetres():
     question("Comment éviter qu'un modèle apprenne sur le futur ?")
@@ -531,7 +524,7 @@ def onglet_mesures():
     montrer(graphique_intervalles(INTERVALLES_LECTURE))
     retenir("si l'intervalle est entièrement sous 0, le modèle fait vraiment mieux ; s'il contient 0, on ne peut pas "
             "conclure ; entièrement au-dessus, il fait vraiment moins bien.")
-    st.caption("Exemples réels du test 2025 : le réseau H7v4 jugé sur chaque vente, puis le modèle hiérarchique.")
+    
 
     st.markdown("#### La règle de décision, fixée avant les résultats")
     with st.container(border=True):
@@ -587,8 +580,7 @@ def onglet_construction():
         ("gabarit_keras.py", "Réseau de neurones avec précautions contre les fuites, dont l'arrêt précoce sur la dernière année d'apprentissage",
          "H7"),
     ], columns=["Fichier", "Ce qu'il fait", "Utilisé par"]).set_index("Fichier"))
-    st.caption("Un gabarit ne choisit ni les variables ni les réglages d'une hypothèse, et n'évalue pas : cela reste dans le "
-               "notebook de l'hypothèse, avec `evaluer` et `tester` de `commun.py`. Le socle s'installe une fois (`pip install -e .`).")
+    
     retenir("deux hypothèses ne diffèrent que par leurs variables : même découpage, même naïve, mêmes mesures, mêmes tests.")
 
     st.markdown("#### Les tests : vérifier le code avant de croire un résultat")
@@ -604,9 +596,7 @@ def onglet_construction():
         carte("Des ventes inventées pour le réseau",
               "Les tests de Keras utilisent des ventes fabriquées à règle connue, jamais les ventes réelles : un réseau qui "
               "fonctionne doit battre la naïve. Sans TensorFlow, ils sont sautés, pas en échec.")
-    st.caption("Les tests des autres modules lisent la table de modélisation préparée (`data/processed/`) sans la modifier. Les valeurs "
-               "de référence du boosting dépendent de la version de scikit-learn (écart observé jusqu'à 1 €/m²). Cette page ne "
-               "relance pas les tests : les résultats du dernier passage sont à montrer en direct si besoin.")
+  
 
     st.markdown("#### Deux parcours pour rejouer le travail")
     gauche, droite = st.columns(2)
@@ -631,7 +621,7 @@ def onglet_construction():
             st.write("C'est le parcours qui montre comment chaque choix a été fait et commenté, y compris l'optimisation du réseau.")
             st.code("python 00_telechargement/telechargement.py dvf_residentiel ...", language="bash")
     retenir("le parcours court vérifie les résultats en une session ; le parcours long montre d'où ils viennent.")
-    st.caption("Le parcours court ne rejoue ni les audits ni les notebooks. Durée indicative du README : elle dépend de la machine.")
+   
 
 
 # =============================================================================
