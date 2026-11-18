@@ -116,11 +116,14 @@ MAILLES = pd.DataFrame([
 PHASES = [("Stabilité", 2015, 2018), ("Hausse", 2018, 2022), ("Retournement", 2022, 2024)]   # lecture sur la France entière
 SEUIL_RETENU = 20
 BASSIN_PARIS = "75056"      # sous-bassins 75056_1, _2 et _3 : bassin de vie de Paris
+CENTRES_ALSACE = "57-67-68"  # sous-bassins au code d'un centre alsacien ou mosellan ; leurs ventes sont en 54, 88 ou 90
 
 
 def departement(code):
     if code == BASSIN_PARIS:
         return "Bassin de vie de Paris"
+    if code == CENTRES_ALSACE:
+        return "Sous-bassins au nom d'un centre alsacien ou mosellan"
     return DEPARTEMENTS.get(code, "département " + code)
 
 
@@ -139,6 +142,8 @@ def territoires():
     t["departement"] = t["sous_bassin_de_vie"].str[:2]
     # Les trois sous-bassins du bassin de vie de Paris couvrent l'Île-de-France : ils ne sont pas dans le 75
     t.loc[t["sous_bassin_de_vie"].str.startswith(BASSIN_PARIS + "_"), "departement"] = BASSIN_PARIS
+    # DVF+ ne couvre pas 57, 67 et 68 : un sous-bassin à ce code vient de communes voisines (54, 88, 90), pas d'Alsace-Moselle
+    t.loc[t["departement"].isin(["57", "67", "68"]), "departement"] = CENTRES_ALSACE
     return t
 
 
@@ -394,7 +399,8 @@ with onglets[2]:
         tout = tout[tout["sous_bassins"] >= 3]      # un département à 1 ou 2 sous-bassins ne dit rien du département
         tout["Département"] = tout["departement"].map(lambda c: c + " – " + departement(c))
         paris = tout[tout["departement"] == BASSIN_PARIS]
-        par_dep = tout[tout["departement"] != BASSIN_PARIS].sort_values("prix", ascending=False)   # carte et classement
+        centres = tout[tout["departement"] == CENTRES_ALSACE]
+        par_dep = tout[~tout["departement"].isin([BASSIN_PARIS, CENTRES_ALSACE])].sort_values("prix", ascending=False)   # carte et classement
         if par_dep.empty:
             afficher_message("Aucun territoire pour ce choix.", "avertissement")
         else:
@@ -430,7 +436,7 @@ with onglets[2]:
                     alsace = [c for c in ("57", "67", "68") if any(d.startswith(c + " ") for d in sans_valeur)]
                     st.caption("Six classes de même effectif, bornes en €/m² : " + " | ".join(fr(v) for v in bornes) + ". En gris : "
                                + str(len(sans_valeur)) + " départements sans valeur"
-                               + (", dont l'Alsace-Moselle, quasi absente de DVF+" if alsace else "")
+                               + (", dont l'Alsace-Moselle, non couverte par DVF+" if alsace else "")
                                + ". Survole un département pour voir son prix, ses sous-bassins et ses ventes.")
             with droite:
                 maxi = float(haut["prix"])
@@ -451,6 +457,9 @@ with onglets[2]:
                     st.caption("Bassin de vie de Paris (sous-bassins 75056_1, _2 et _3) : " + fr(float(paris["prix"].iloc[0]))
                                + " €/m². Il couvre l'Île-de-France : présenté à part, hors carte et hors classement. "
                                "« 75 – Paris » ne regroupe que les arrondissements.")
+                if not centres.empty:
+                    st.caption(str(int(centres["sous_bassins"].iloc[0])) + " sous-bassins portent le code d'un centre d'Alsace-Moselle (57, 67 ou 68) "
+                               "mais leurs ventes sont dans les départements voisins (54, 88, 90) : ils sont hors carte et hors classement.")
 
             question(2, "Comment lire la carte ?")
             st.write("Couleur : prix médian au m² des sous-bassins du département, en six classes de même effectif. En gris : "
@@ -478,7 +487,9 @@ with onglets[2]:
                     "- Le bassin de vie de Paris (codes 75056_x) n'est pas un département : il est présenté à part. Il compte "
                     "440 communes (rapport, partie 3.2) et est découpé par densité en trois sous-bassins.",
                     "- L'Alsace, la Moselle et Mayotte sont absentes de DVF+ : la publicité foncière y relève du livre foncier "
-                    "(rapport, partie 2.1).",
+                    "(rapport, partie 2.1). Quelques sous-bassins portent pourtant le code d'un centre alsacien ou mosellan "
+                    "(ex. Sarrebourg, 57630) : leurs ventes viennent de communes voisines, en Meurthe-et-Moselle, dans les Vosges ou "
+                    "dans le Territoire de Belfort. Ils sont écartés du classement par département.",
                 ]
                 sans_sous_bassin = [c for c in ("92", "93", "94") if any(d.startswith(c + " ") for d in sans_valeur)]
                 if sans_sous_bassin:
