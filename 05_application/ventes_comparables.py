@@ -16,7 +16,7 @@
 #      - le nombre de pièces ;
 #      - le terrain, en log(1 + x), pour les maisons seulement.
 #    Chaque variable est mise à l'échelle (centrée, divisée par son écart-type) sur les ventes du secteur :
-#    sinon le terrain, en centaines de m², écraserait les pièces. Distance = distance euclidienne.
+#    sinon le terrain, en centaines de m², écraserait les pièces. Distance = distance euclidienne pondérée (POIDS_DISTANCE, ou POIDS_SANS_TERRAIN pour une maison sans terrain).
 #    À distance égale, la vente la plus récente passe d'abord.
 #
 # 2. Fourchette des biens équivalents (règle proposée par Cécile, contrat du 15/11)
@@ -38,6 +38,18 @@ from localisation import localiser
 
 FICHIER = "ventes_comparables.parquet"
 MIN_VENTES_PROCHES = 5          # en dessous, recherche des ventes proches élargie au bassin de vie
+
+# Poids de la distance (tests du 18/11, test_poids_distance.py) : chaque écart mis à l'échelle est multiplié
+# par son poids avant la distance. Critère : écart entre la médiane des prix au m² des 8 voisins et le vrai prix
+# au m² (ventes réelles retirées une à une, 60 secteurs).
+# - maison avec terrain, appartement : poids égaux, les meilleurs repères de prix ;
+# - maison sans terrain (maison de ville) : surface renforcée. Erreur de prix médiane 17,5 % contre 18,1 %,
+#   écart de surface moyen 7,6 % contre 15,3 %.
+# - seuil à 0 et pas plus haut : dès 1 m² de terrain, (4, 1, 1) perd sur le prix (33,1 % contre 29,5 % entre
+#   1 et 30 m² ; 32,8 % contre 30,5 % entre 30 et 100 m²).
+# Pas de test statistique sur les écarts de prix : les différences sont régulières mais petites.
+POIDS_DISTANCE = {"surface": 1.0, "pieces": 1.0, "terrain": 1.0}
+POIDS_SANS_TERRAIN = {"surface": 4.0, "pieces": 1.0, "terrain": 1.0}
 
 # Niveaux de la fourchette, du plus précis au plus large : (échelle, pièces)
 #   pièces : "même" (même nombre de pièces), "±1" (une pièce de plus ou de moins), "toutes"
@@ -100,8 +112,14 @@ def plus_proches(candidates, bien, k):
     z_ventes = (x_ventes - moyennes) / ecarts
     z_bien = (x_bien.iloc[0] - moyennes) / ecarts
 
-    # Distance euclidienne de chaque vente au bien
-    distance = np.sqrt(((z_ventes - z_bien) ** 2).sum(axis=1))
+        # Distance euclidienne pondérée de chaque vente au bien
+    # Maison sans terrain (maison de ville) : la surface pèse plus, sinon les voisins sont trop petits
+    if bien["type_bien"] == "maison" and float(bien["sterr"]) == 0:
+        poids = pd.Series(POIDS_SANS_TERRAIN)
+    else:
+        poids = pd.Series(POIDS_DISTANCE)
+    poids = poids[z_ventes.columns]          # appartement : pas de colonne terrain
+    distance = np.sqrt((((z_ventes - z_bien) * poids) ** 2).sum(axis=1))
 
     resultat = candidates.assign(distance=distance.round(3))
     resultat = resultat.sort_values(["distance", "annee", "mois"], ascending=[True, False, False]).head(k)
