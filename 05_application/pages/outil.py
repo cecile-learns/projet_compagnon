@@ -142,10 +142,13 @@ with onglet_estimer:
     # -----------------------------------------------------------------------------
     estimation = contrats.estimer(bien)
     ventes_proches = contrats.comparables(bien, k=nb_comparables)
+
+    phrase_type = contrats.expliquer(estimation, ventes_proches)
+    explication = phrase_type
     if avec_llm:
         explication = contrats.expliquer_llm(estimation, ventes_proches)
-    else:
-        explication = contrats.expliquer(estimation, ventes_proches)
+    # Vrai seulement si le texte vient vraiment du modèle de langage (en cas de repli, c'est la phrase type)
+    genere_par_ia = explication != phrase_type
 
 
     # -----------------------------------------------------------------------------
@@ -232,6 +235,8 @@ with onglet_estimer:
     # -----------------------------------------------------------------------------
     st.subheader("En résumé")
     st.write(explication)
+    if genere_par_ia:
+        st.caption("*Texte généré par IA.*")
     st.caption("Limite : le modèle estime un bien à partir des prix de l'année précédente et de l'évolution récente. "
             "Il n'anticipe pas un retournement du marché. La fourchette décrit des ventes passées, ce n'est pas "
             "une garantie de prix.")
