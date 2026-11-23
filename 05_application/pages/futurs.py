@@ -1,5 +1,5 @@
 # =============================================================================
-# 05_application/pages/prepa_modelisation.py : page Préparation des données (Gabrielle)
+# 05_application/pages/futur.py : Développements futurs possibles (Gabrielle)
 # =============================================================================
 # Ce que fait la page : raconte le chemin des données, des sources brutes à la table de modélisation.
 # Cinq onglets, chacun suit le même parcours que la page EDA : un message clé (« À retenir »), puis des
@@ -70,8 +70,8 @@ def carte(titre, texte, legende=None):
             st.caption(legende)
 
 
-entete("Préparation des données",
-       "Du téléchargement des sources à la table de modélisation : méthode, pipeline et choix")
+entete("Développements futurs possibles",
+       "Idées et pistes pour améliorer le projet")
 
 onglets = st.tabs(["Méthodologie", "Téléchargement", "Préparation", "Feature engineering", "Fusion"])
 
