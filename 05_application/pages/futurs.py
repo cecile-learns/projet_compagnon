@@ -90,7 +90,7 @@ DIRECTIONS = [
      "surtout l'écart entre prix demandé et prix payé.",
      "Lève la limite la plus lourde : DVF+ ne voit ni l'état du bien, ni l'étage, ni la performance énergétique."),
     ("2 · Architecture prête", "Étendre l'outil aux annonces",
-     "Avec des annonces sur un territoire couvert par DVF+, l'assistant prévu au départ redevient possible : "
+     "Avec des annonces sur un territoire couvert aussi par le DVF+, il est alors possible de : "
      "comprendre une recherche en langage libre, proposer des annonces, confronter chaque prix demandé à "
      "l'estimation issue des ventes réelles.",
      "L'axe 2 a été abandonné faute de données, pas faute d'intérêt. Les quatre blocs de l'outil ont déjà leurs "
