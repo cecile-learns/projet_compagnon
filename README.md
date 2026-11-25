@@ -245,7 +245,7 @@ python 04_outils/preparer_eda_app.py               # fichiers lus par la page Ex
 python 04_outils/produire_ref_trimestres_2025.py   # référence des trimestres 2025, lue par controle_lignes_2025.py
 ```
 
-**Règle sur les données de l'application.** L'application n'a pas accès à `data/` : elle ne lit que les dix fichiers de `05_application/donnees/`, versionnés dans Git. Chacun est produit par un script de `04_outils`, qui lit `data/processed/` et écrit dans ce dossier. On ne les modifie jamais à la main.
+**Règle sur les données de l'application.** L'application n'a pas accès à `data/` : elle ne lit que fichiers de `05_application/donnees/`, versionnés dans Git. Chacun est produit par un script de `04_outils`, qui lit `data/processed/` et écrit dans ce dossier. On ne les modifie jamais à la main.
 
 #### Le modèle livré : `models/h7v4/`
 
