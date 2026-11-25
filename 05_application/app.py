@@ -15,7 +15,7 @@ st.set_page_config(page_title="Compagnon Immobilier", page_icon="🏠", layout="
 # Navigation : l'ordre de la liste est l'ordre du menu ; l'outil s'ouvre en premier
 pages = [
     st.Page("pages/eda.py", title="Exploration des données", icon="📊"),
-    st.Page("pages/resultats.py", title="Modélisation", icon="📈"),
+    st.Page("pages/modelisation.py", title="Modélisation", icon="📈"),
     st.Page("pages/outil.py", title="Outil", icon="🏠", default=True),
     st.Page("pages/futurs.py", title="Développements futurs", icon="🧭"),
 ]
