@@ -6,8 +6,13 @@
 #   - départements d'outre-mer exclus ;
 #   - codes commune nettoyés : la livraison SQL les écrit entre accolades ({33125}), la préparation les attend
 #     sans (33125) ;
-#   - filtre_perimetre du bloc 2 de 01_preparation/preparation.py (vente d'un seul logement ancien, une seule
-#     commune), importé de ce fichier : une seule définition des règles.
+#   - filtre_perimetre : vente d'un seul logement ancien (une maison ou un appartement), sur une seule commune.
+#     Ce sont les règles du bloc 2 de 01_preparation/preparation.py, RECOPIÉES ici : ce script appartient à la
+#     mise en production, il ne dépend pas du code de recherche et peut être modifié sans y revenir.
+#     Si la préparation change un jour de règle, ce fichier ne suit pas tout seul : voir le contrôle ci-dessous.
+# Contrôle d'équivalence avec la préparation (à refaire si l'un des deux filtres est modifié) : appliquer ce
+# script au fichier assemblé d'une année déjà préparée et comparer le nombre de ventes retenues avec le
+# nombre de ventes de cette année dans data/processed/dvf_plus_residentiel.parquet.
 # Écrit un Parquet de même contenu que dvf_plus_residentiel.parquet (mêmes colonnes, hors géométries et listes
 # d'identifiants que l'extraction n'a pas gardées), sans rien modifier du pipeline : le fichier est une sortie à
 # part, que la préparation ne lit pas.
@@ -23,12 +28,25 @@ from pathlib import Path
 import pandas as pd
 
 RACINE = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(RACINE), str(RACINE / "01_preparation")]
+sys.path[:0] = [str(RACINE)]
 from config import DATA_OUT                          # noqa: E402
-from preparation import filtre_perimetre             # noqa: E402
+
 
 COLONNES_REQUISES = ["anneemut", "moismut", "coddep", "libnatmut", "nbcomm", "l_codinsee",
                      "libtypbien", "nblocmai", "nblocapt", "nblocact"]
+
+
+
+def filtre_perimetre(df):
+    """Garde les ventes d'un seul logement ancien, sur une seule commune (mêmes règles que le bloc 2)."""
+    nature_ok = df["libnatmut"] == "Vente"
+    une_commune = df["nbcomm"] == 1
+    maison_ok = ((df["libtypbien"] == "UNE MAISON") & (df["nblocmai"] == 1)
+                 & (df["nblocapt"] == 0) & (df["nblocact"] == 0))
+    appartement_ok = ((df["libtypbien"] == "UN APPARTEMENT") & (df["nblocapt"] == 1)
+                      & (df["nblocmai"] == 0) & (df["nblocact"] == 0))
+    return df.loc[nature_ok & une_commune & (maison_ok | appartement_ok)]
+
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("csv", type=Path, help="dvf_plus_assemble.csv, produit par extraire_dvf_plus.py assembler")
