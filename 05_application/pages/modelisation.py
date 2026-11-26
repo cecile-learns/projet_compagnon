@@ -8,11 +8,13 @@
 #   3. La fiabilité       le gain sur la naïve (B et C) et la fourchette d'erreur
 #   4. L'interprétation   ce que le modèle permet, et ce qu'il ne permet pas
 # Le cheminement complet (niveau 1, pont, signaux « quand », variantes de H7, mesures, code) est dans le rapport ;
-# l'ancienne page détaillée (12 onglets) est conservée dans 05_application/en_attente/modelisation_detail.py.
+# les anciens onglets détaillés ne sont pas repris dans l'application.
 #
 # Données lues : aucune. Les chiffres sont repris du rapport de recherche (tableau 20, test 2025) et de la fiche du
-# modèle (models/h7v4/MODEL_CARD.md, fourchette d'erreur issue de h7v4_parametres.json). La page s'affiche donc sans
-# le dossier data/.
+# modèle (models/h7v4/MODEL_CARD.md, fourchette d'erreur issue de h7v4_parametres.json), comparaison avec les autres
+# modèles par vente sur 2023 et 2024 (rapport, tableaux 18 et 33 ; notebook H7, 5.3), importance par permutation
+# (notebook H7, 6.2). La page s'affiche donc sans le
+# dossier data/.
 # Règles de l'application : aucune couleur ni police ici (thème commun), seulement les fonctions de commun_app.
 # Les graphiques utilisent les couleurs du thème (alt.Color sur une colonne de texte, jamais de code couleur).
 
@@ -146,6 +148,25 @@ FOURCHETTE = [
 PART_SOUS_BASSINS = 72
 
 
+# --- Autres références, années jugées 2023 et 2024 (pas le test 2025) : gain sur la naïve (%), chaque vente (B) ---
+# (modèle par vente, appartements 2023, maisons 2023, appartements 2024, maisons 2024)
+CAS = ["Appartements 2023", "Maisons 2023", "Appartements 2024", "Maisons 2024"]
+MODELES_VENTE = [
+    ("Régression hédonique (apprise sur l'année N-1)", -3.9, -3.4, -6.1, -4.4),
+    ("Elastic Net (bien, territoire, prix N-1)", 2.0, 2.3, 1.8, 2.6),
+    ("H7v4", 5.6, 6.7, 5.4, 7.3),
+]
+
+# --- Importance par permutation, année jugée 2024 (notebook H7, 6.2) : hausse de l'erreur moyenne par vente (€/m²)
+# quand les informations d'une famille sont mélangées entre les ventes. (famille, appartements, maisons)
+PERMUTATION = [
+    ("Prix de l'an dernier", 1559, 912),
+    ("Le bien", 146, 125),
+    ("Le lieu", 115, 68),
+    ("Le « quand »", 102, 90),
+]
+
+
 # =============================================================================
 # 2. Graphiques
 # =============================================================================
@@ -158,6 +179,22 @@ def graphique_gains():
     df = pd.DataFrame(lignes)
     return barres_gain(df, "Évaluation", couleur="Type", ordre_couleur=["Appartements", "Maisons"], hauteur=260,
                        decalage="Type")
+
+def graphique_permutation():
+    lignes = []
+    for ordre, (famille, appartements, maisons) in enumerate(PERMUTATION):
+        for type_bien, valeur in (("Appartements", appartements), ("Maisons", maisons)):
+            lignes.append({"Famille": famille, "Type": type_bien, "Hausse": valeur, "ordre": ordre,
+                           "texte": "+" + fr(valeur)})
+    df = pd.DataFrame(lignes)
+    codage = dict(y=alt.Y("Famille:N", sort=ordre_lignes(df, "Famille"), title=None, axis=alt.Axis(labelLimit=330)),
+                  x=alt.X("Hausse:Q", title="Hausse de l'erreur par vente (€/m²)",
+                          scale=alt.Scale(domain=[0, df["Hausse"].max() * 1.15]),
+                          axis=alt.Axis(tickCount=5, labelExpr="replace(format(datum.value, ',d'), ',', ' ')")),
+                  yOffset=alt.YOffset("Type:N"))
+    barres = alt.Chart().mark_bar().encode(color=alt.Color("Type:N", title=None), **codage)
+    textes = alt.Chart().mark_text(align="left", dx=4, fontSize=14).encode(text="texte:N", **codage)
+    return alt.layer(barres, textes, data=df).properties(height=260)
 
 
 # =============================================================================
@@ -186,11 +223,13 @@ st.write("**H7v4** est un réseau de neurones qui estime le prix au m² d'un log
          "familles d'informations et apprend l'écart au prix de l'année précédente.")
 colonnes = st.columns(3)
 with colonnes[0]:
-    carte("Le bien", "Surface, nombre de pièces, terrain.")
+    carte("Le bien", "Type, surface, nombre de pièces, terrain, dépendances.")
 with colonnes[1]:
-    carte("Le territoire", "Le sous-bassin de vie et son prix de l'année précédente.")
+    carte("Le territoire", "Le sous-bassin de vie, son prix de l'année précédente, son parc de logements, la vacance et la "
+                            "densité.")
 with colonnes[2]:
-    carte("Le « quand »", "Volume de ventes, élan des prix, capacité d'achat (le taux d'effort) et trimestre.")
+    carte("Le « quand »", "Volume de ventes, élan des prix, capacité d'achat (le taux d'effort), prix et volume de "
+                              "la fin de l'année précédente.")
 chiffres = st.columns(3)
 chiffres[0].metric("Variables d'entrée", "35", "bien, territoire, « quand »", delta_color="off")
 chiffres[1].metric("Ventes d'apprentissage", "773 106", "2017 à 2025", delta_color="off")
@@ -218,6 +257,15 @@ montrer(graphique_gains())
 retenir("sur chaque vente, le modèle fait mieux que la naïve de 6 à 8 % ; sur la médiane d'un territoire, il fait "
         "moins bien.")
 
+st.markdown("#### Et face à d'autres modèles par vente ?")
+st.table(pd.DataFrame([[signe(v, 1) + " %" for v in gains] for _nom, *gains in MODELES_VENTE],
+                      index=[ligne[0] for ligne in MODELES_VENTE], columns=CAS))
+retenir("H7v4 gagne 3,6 à 4,7 points de plus que l'Elastic Net ; une régression hédonique, qui connaît le bien, fait "
+        "moins bien que la naïve.")
+st.caption("Gain sur la naïve, chaque vente, années jugées 2023 et 2024 (ces deux références n'ont pas été jugées sur "
+           "2025). L'Elastic Net ne reçoit pas les indicateurs du « quand » : l'écart avec H7v4 vient à la fois du "
+           "réseau et de ces indicateurs.")
+
 st.markdown("#### L'erreur à attendre sur une vente")
 colonnes = st.columns(2)
 for colonne, (type_bien, _n, bas, mediane, haut) in zip(colonnes, FOURCHETTE):
@@ -234,11 +282,18 @@ question("Que faut-il en conclure ?")
 cle("Le modèle estime un bien, il ne prévoit pas le marché",
     "L'hypothèse est confirmée sur la vente, pas sur le territoire : le gain est réel mais modéré, et il ne dit "
     "rien de l'évolution du marché.")
+st.markdown("#### De quoi le modèle a-t-il besoin pour être juste ?")
+montrer(graphique_permutation())
+retenir("le prix de l'an dernier donne le niveau, le bien fait l'ajustement principal.")
+st.caption("Importance par permutation, année jugée 2024 : on mélange une famille d'informations entre les ventes et on "
+           "mesure de combien l'erreur augmente. Les informations liées se partagent l'importance : le lieu est déjà en "
+           "partie porté par le prix de l'an dernier.")
+
 colonnes = st.columns(3)
 with colonnes[0]:
     carte("Le territoire dit où, pas quand",
-          "Il explique les écarts de prix entre territoires, mais le modèle complet du niveau 1 reste moins bon que "
-          "la naïve. Le seul signal du « quand » qui aide nettement est le taux d'effort, qui contient le taux des "
+          "Il explique les écarts de prix entre territoires, mais le modèle construit sur les seuls territoires reste "
+          "moins bon que la naïve. Le seul signal du « quand » qui aide nettement est le taux d'effort, qui contient le taux des "
           "crédits.")
 with colonnes[1]:
     carte("Un gain réel, une marge large",
@@ -246,5 +301,6 @@ with colonnes[1]:
           "(appartements) ou de −43 % à +53 % (maisons). L'outil donne une estimation et des ventes comparables, pas un prix.")
 with colonnes[2]:
     carte("Une réserve à connaître",
-          "La naïve de l'évaluation B ignore le bien : une part du gain peut venir de cette information. Le test porte "
-          "sur 2025 seule, un marché presque plat.")
+          "La naïve ignore le bien. Un modèle linéaire qui le connaît gagne déjà environ 2 % : une partie du gain de "
+          "H7v4 vient de l'information, le reste de la forme du réseau et des indicateurs du « quand » (2023 et 2024). "
+          "Le test porte sur 2025 seule, un marché presque plat.")
