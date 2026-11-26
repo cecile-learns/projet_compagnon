@@ -2,23 +2,13 @@
 
 ## Description
 
-L'objectif du projet est de développer une solution innovante permettant aux acheteurs et investisseurs immobiliers d'explorer, comparer et estimer les prix des logements sur différents territoires.
+Le projet aide un particulier à estimer le prix d'un logement ancien et à le comparer à des ventes réelles, en France métropolitaine hors Alsace-Moselle.
 
-Le projet s'appuie sur deux axes principaux :
+- **Données** : ventes DVF+ 2014-2025 (Cerema) et sources socio-économiques et territoriales.
+- **Modélisation** : prévision du prix médian au m² d'un territoire, puis du prix de chaque vente. Le modèle retenu, H7v4, estime un bien ; il ne prévoit pas le marché.
+- **Outil** : estimation et ventes comparables, présentées dans une application Streamlit.
 
-### 1. Analyse des données immobilières et territoriales
-
-- Prédiction du prix des logements selon les territoires (niveau du prix médian au m², pour l'achat d'un seul logement ancien par un particulier).
-- Exploitation des ventes immobilières historiques (DVF+).
-- Intégration de facteurs socio-économiques (démographie, revenus, logement, délinquance, équipements, etc.).
-
-### 2. Exploitation des annonces immobilières
-
-- Extraction d'informations à partir des descriptions d'annonces.
-- Analyse des images des biens immobiliers.
-- Développement d'un chatbot intelligent capable de comprendre les requêtes des utilisateurs et de proposer les annonces les plus pertinentes.
-
-L'ambition du projet est de combiner des approches de machine learning classiques (analyse tabulaire et modélisation prédictive) avec le traitement du langage naturel afin de fournir aux acheteurs un outil d'aide à la décision fiable et interactif.
+**Axe annonces, abandonné.** Le sujet prévoyait aussi l'exploitation d'annonces (texte, images, chatbot). Le jeu fourni porte sur le Haut-Rhin, que DVF+ ne couvre pas, sur une courte période, avec des prix demandés et non payés, et sans métadonnées. Les ventes comparables DVF+ en tiennent lieu.
 
 ## Organisation du dépôt
 
@@ -196,6 +186,8 @@ Les contrôles lisent `data/processed/table_modelisation_bv.parquet` (ceux de Ke
 ### 5. Modélisation
 
 Les hypothèses sont des notebooks (`1_tour1`, `3_tour2`) ; les préparations du tour 2 et les deux tests finaux sont des scripts (`2_prepa_tour2`, `4_evaluation_2025`) ; les résultats du test 2025 sont comparés dans le notebook `4_evaluation_2025/evaluation_2025.ipynb`. Ordre des sous-dossiers de `03_modelisation` : `1_tour1`, puis `2_prepa_tour2`, `3_tour2` et `4_evaluation_2025`. Chaque notebook affiche ses résultats au fur et à mesure, avec leurs commentaires et une synthèse. Pour une nouvelle hypothèse, copier `modelisation_template.ipynb`.
+
+Le notebook H7 (modèle par vente) est enregistré avec ses sorties : son exécution complète dépasse deux heures, il peut être lu sans être relancé.
 
 Chaque notebook importe `socle/commun.py`, qui fixe pour toute l'équipe :
 
@@ -413,6 +405,9 @@ Le prix N-1 du territoire, les variables « où » et le seuil de 20 ventes sont
 - Rapport de modélisation
 - Rapport final
 - Dépôt GitHub associé
+- Modèle H7v4 enregistré et documenté (`models/h7v4/`) et fonctions de l'outil
+
+L'application Streamlit est un démonstrateur, hors livrables.
 
 ## Équipe
 
