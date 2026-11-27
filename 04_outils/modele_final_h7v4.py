@@ -12,13 +12,16 @@
 # Pas de MLflow. La fourchette n'est pas recalculée : elle est lue dans fourchette_h7v4.json
 # (produit par fourchette_h7v4.py) et recopiée dans le fichier de paramètres.
 #
-# Produit (data/processed) :
+# Produit dans models/h7v4/ (versionné dans Git : c'est le modèle livré) :
 #   h7v4.keras              : le réseau
 #   h7v4_parametres.json    : tout ce qu'il faut pour préparer un bien et lire la prévision (lu par estimer())
+#   SHA256SUMS, MODEL_CARD.md : empreintes et fiche du modèle (écrites par fiche_modele.py)
+# Les deux premiers fichiers sont ensuite copiés dans 05_application/donnees/, où l'application les lit.
 # Lancement, depuis la racine du projet :  python 04_outils/modele_final_h7v4.py
 # Durée : un entraînement du réseau.
 
 import json
+import shutil
 import time
 import warnings
 from datetime import date
@@ -28,6 +31,8 @@ import numpy as np
 import pandas as pd
 
 import commun
+from config import RACINE
+from fiche_modele import ecrire_fiche
 from commun import (charger_table, charger_ventes_brutes, rattacher_ventes, mediane_ponderee)
 from gabarit_keras import ReseauKeras
 
@@ -40,14 +45,17 @@ pd.set_option("display.width", 220)
 ANNEE_DEBUT_H7 = 2017
 ANNEE_FIN = 2025                       # dernière année d'apprentissage du modèle final
 FOURCHETTE = commun.DATA_OUT / "fourchette_h7v4.json"
-SORTIE_RESEAU = commun.DATA_OUT / "h7v4.keras"
-SORTIE_PARAMETRES = commun.DATA_OUT / "h7v4_parametres.json"
+DOSSIER_MODELE = RACINE / "models" / "h7v4"                     # le modèle livré (versionné)
+DOSSIER_APPLICATION = RACINE / "05_application" / "donnees"      # copie lue par l'application
+SORTIE_RESEAU = DOSSIER_MODELE / "h7v4.keras"
+SORTIE_PARAMETRES = DOSSIER_MODELE / "h7v4_parametres.json"
 QUAND_EN_LOG = ["nb_ventes_n1", "rotation_parc_type", "taux_effort"]     # comme preparer_quand_niveau2
 
 assert FOURCHETTE.exists(), "lancer d'abord fourchette_h7v4.py (fourchette_h7v4.json absent)"
 for f in [SORTIE_RESEAU, SORTIE_PARAMETRES]:
     if f.exists():
-        raise SystemExit(f"{f.name} existe déjà : supprime-le ou renomme-le avant de relancer (pas d'écrasement).")
+        raise SystemExit(f"{f} existe déjà : supprime-le ou renomme-le avant de relancer (pas d'écrasement).")
+DOSSIER_MODELE.mkdir(parents=True, exist_ok=True)
 
 
 # -----------------------------------------------------------------------------
@@ -283,7 +291,8 @@ parametres = {
 reseau.modele_.save(SORTIE_RESEAU)
 with open(SORTIE_PARAMETRES, "w", encoding="utf-8") as f:
     json.dump(parametres, f, ensure_ascii=False, indent=1)
-print(f"Enregistré : {SORTIE_RESEAU.name}, {SORTIE_PARAMETRES.name}")
+print(f"Enregistré dans {DOSSIER_MODELE} : {SORTIE_RESEAU.name}, {SORTIE_PARAMETRES.name}")
+ecrire_fiche(DOSSIER_MODELE)                 # SHA256SUMS et MODEL_CARD.md, d'après le fichier de paramètres
 
 
 # -----------------------------------------------------------------------------
@@ -312,3 +321,12 @@ ecart = float((apres / avant - 1).abs().max())
 print(f"Contrôle sur les {len(controle)} ventes de {ANNEE_FIN} : écart relatif maximal {ecart:.2e}")
 assert ecart < 1e-5, "le modèle rechargé ne redonne pas les mêmes prévisions"
 print("Contrôle réussi : le modèle rechargé redonne les mêmes prévisions.")
+
+
+# -----------------------------------------------------------------------------
+# 10. Copie dans l'application : elle lit ses fichiers dans 05_application/donnees/
+# -----------------------------------------------------------------------------
+DOSSIER_APPLICATION.mkdir(parents=True, exist_ok=True)
+for fichier in (SORTIE_RESEAU, SORTIE_PARAMETRES):
+    shutil.copy2(fichier, DOSSIER_APPLICATION / fichier.name)
+print(f"Copié dans {DOSSIER_APPLICATION} : {SORTIE_RESEAU.name}, {SORTIE_PARAMETRES.name}")

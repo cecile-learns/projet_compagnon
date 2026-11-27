@@ -2,23 +2,13 @@
 
 ## Description
 
-L'objectif du projet est de développer une solution innovante permettant aux acheteurs et investisseurs immobiliers d'explorer, comparer et estimer les prix des logements sur différents territoires.
+Le projet aide un particulier à estimer le prix d'un logement ancien et à le comparer à des ventes réelles, en France métropolitaine hors Alsace-Moselle.
 
-Le projet s'appuie sur deux axes principaux :
+- **Données** : ventes DVF+ 2014-2025 (Cerema) et sources socio-économiques et territoriales.
+- **Modélisation** : prévision du prix médian au m² d'un territoire, puis du prix de chaque vente. Le modèle retenu, H7v4, estime un bien ; il ne prévoit pas le marché.
+- **Outil** : estimation et ventes comparables, présentées dans une application Streamlit.
 
-### 1. Analyse des données immobilières et territoriales
-
-- Prédiction du prix des logements selon les territoires (niveau du prix médian au m², pour l'achat d'un seul logement ancien par un particulier).
-- Exploitation des ventes immobilières historiques (DVF+).
-- Intégration de facteurs socio-économiques (démographie, revenus, logement, délinquance, équipements, etc.).
-
-### 2. Exploitation des annonces immobilières
-
-- Extraction d'informations à partir des descriptions d'annonces.
-- Analyse des images des biens immobiliers.
-- Développement d'un chatbot intelligent capable de comprendre les requêtes des utilisateurs et de proposer les annonces les plus pertinentes.
-
-L'ambition du projet est de combiner des approches de machine learning classiques (analyse tabulaire et modélisation prédictive) avec le traitement du langage naturel afin de fournir aux acheteurs un outil d'aide à la décision fiable et interactif.
+**Axe annonces, abandonné.** Le sujet prévoyait aussi l'exploitation d'annonces (texte, images, chatbot). Le jeu fourni porte sur le Haut-Rhin, que DVF+ ne couvre pas, sur une courte période, avec des prix demandés et non payés, et sans métadonnées. Les ventes comparables DVF+ en tiennent lieu.
 
 ## Organisation du dépôt
 
@@ -41,7 +31,8 @@ projet_compagnon/
 │   ├── 1_audits_sources.ipynb               ← audit de chaque source brute
 │   ├── 1_eda_sources.ipynb                  ← analyse exploratoire des sources : cible, relations, synthèse
 │   ├── 2_audit_eda_table_modelisation.ipynb ← audit et EDA de la table de modélisation, historique des passages
-│   └── 3_temporalite_prix_national.ipynb    ← SARIMA sur le prix national : enseignements pour formuler les hypothèses
+│   ├── 3_temporalite_prix_national.ipynb    ← SARIMA sur le prix national : enseignements pour formuler les hypothèses
+│   └── 04_baseline.ipynb                    ← baseline de la cible (prix N-1), lit la table sans l'écrire
 ├── socle/                          ← code partagé, importé par les notebooks et les scripts
 │   ├── commun.py                   ← table, découpage, prévision naïve, évaluation et tests contre la naïve
 │   ├── gabarit_boosting.py         ← gradient boosting (même grille pour toutes les hypothèses)
@@ -56,15 +47,17 @@ projet_compagnon/
 │   ├── 2_prepa_tour2/              ← scripts P6, P7, P9 : préparations propres au tour 2
 │   ├── 3_tour2/                    ← H4 (pont), H5 (volume et élan), H6 (capacité d'achat), H5-H6 (comparaison), H7 (modèle par vente)
 │   └── 4_evaluation_2025/          ← test final sur 2025, ouvert une seule fois : deux scripts, puis un notebook qui compare les résultats
-├── 04_outils/                      ← modèle final et lignes d'entrée de l'outil
-└── 05_application/                 ← application Streamlit
+├── 04_outils/                      ← modèle final et sa fiche, lignes d'entrée, ventes comparables, mise à jour de DVF+
+├── 05_application/                 ← application Streamlit
+└── models/
+    └── h7v4/                       ← le modèle livré : réseau, paramètres, fiche et empreintes (versionné)
 ```
 
-**Lecture des noms de dossiers.** Un dossier numéroté est une étape du pipeline, à lancer dans l'ordre des numéros (y compris les sous-dossiers de `03_modelisation`). Un dossier sans numéro (`socle`, `tests`, `data`) sert de support aux étapes, sans ordre d'exécution. Un dossier qui commence par un point (`.git`, `.streamlit`, environnement virtuel) appartient à l'outillage.
+**Lecture des noms de dossiers.** Un dossier numéroté est une étape du pipeline, à lancer dans l'ordre des numéros (y compris les sous-dossiers de `03_modelisation`). Un dossier sans numéro (`socle`, `tests`, `data`, `models`) sert de support aux étapes, sans ordre d'exécution. Un dossier qui commence par un point (`.git`, `.streamlit`, environnement virtuel) appartient à l'outillage.
 
 **Lecture des formats.** Un seul format par type de fichier : les préparations, les gabarits et les scripts sont des `.py` ; les analyses exploratoires et les modélisations sont des notebooks, car elles produisent des résultats à commenter et des synthèses.
 
-GitHub ne contient que du code. Les données sont sur un Google Drive partagé, lisible par toute personne ayant le lien : https://drive.google.com/drive/folders/1bVlZgMTxjtoWMveHXJEsxY6LPRo6U6nZ
+GitHub contient le code et, en plus, ce dont l'outil a besoin pour fonctionner sans le dossier `data/` : les fichiers de données de `05_application/donnees/` (tables des communes, ventes comparables, lignes d'entrée 2026, fichiers du modèle, tables de la page d'exploration) et le modèle livré de `models/h7v4/`. Les données de travail (sources brutes, fichiers préparés, table de modélisation) ne sont jamais dans GitHub : elles sont sur un Google Drive partagé, lisible par toute personne ayant le lien : https://drive.google.com/drive/folders/1bVlZgMTxjtoWMveHXJEsxY6LPRo6U6nZ
 
 Les rapports (rédigés en Word, remis en PDF) sont tenus à part, sur le Google Drive de l'équipe.
 
@@ -81,6 +74,8 @@ pip install -e .                  # socle : rend « from commun import ... » di
 `pip install -e .` ne se fait qu'une fois. Le mode `-e` (éditable) est nécessaire : le socle lit `config.py` et `data/` à la racine du projet, et toute modification du socle est prise en compte sans réinstaller.
 
 Toutes les commandes se lancent depuis la racine du projet.
+
+`py7zr` (lecture des archives 7z de la livraison du Cerema) n'est nécessaire que pour l'étape `extraire` de la mise à jour de DVF+ (voir « 6. Outils ») : `pip install py7zr`. Il n'est pas dans `requirements.txt`, le reste du projet n'en a pas besoin.
 
 ## Parcours court
 
@@ -157,6 +152,7 @@ Les audits et l'analyse exploratoire sont des notebooks, sans version script : i
 - `02_audit_eda/1_eda_sources.ipynb` : la cible, les relations à l'intérieur de chaque source, les relations avec la cible, et la synthèse. Les cartes ont besoin d'un accès à internet (contours des départements et des communes).
 - `02_audit_eda/2_audit_eda_table_modelisation.ipynb` : audit et EDA de la table de modélisation, à lancer après l'étape 4. Il se relance à chaque changement de la table ; sa synthèse garde, pour chaque passage, la date et les enseignements tirés.
 - `02_audit_eda/3_temporalite_prix_national.ipynb` : SARIMA sur le prix national. Ce n'est pas un modèle de l'outil : l'analyse sert à tirer des enseignements pour formuler les hypothèses de modélisation.
+- `02_audit_eda/04_baseline.ipynb` : la baseline de la cible (prix N-1 comme prévision), sur le découpage du socle. Il lit la table de modélisation et ne produit aucun fichier : aucun notebook ni script ne doit écrire dans `data/processed/` sous le nom d'un fichier de production.
 
 ### 4. Feature engineering et table de modélisation
 
@@ -191,6 +187,8 @@ Les contrôles lisent `data/processed/table_modelisation_bv.parquet` (ceux de Ke
 
 Les hypothèses sont des notebooks (`1_tour1`, `3_tour2`) ; les préparations du tour 2 et les deux tests finaux sont des scripts (`2_prepa_tour2`, `4_evaluation_2025`) ; les résultats du test 2025 sont comparés dans le notebook `4_evaluation_2025/evaluation_2025.ipynb`. Ordre des sous-dossiers de `03_modelisation` : `1_tour1`, puis `2_prepa_tour2`, `3_tour2` et `4_evaluation_2025`. Chaque notebook affiche ses résultats au fur et à mesure, avec leurs commentaires et une synthèse. Pour une nouvelle hypothèse, copier `modelisation_template.ipynb`.
 
+Le notebook H7 (modèle par vente) est enregistré avec ses sorties : son exécution complète dépasse deux heures, il peut être lu sans être relancé.
+
 Chaque notebook importe `socle/commun.py`, qui fixe pour toute l'équipe :
 
 - la table et le masque des lignes communes (`charger_table`) ;
@@ -222,12 +220,56 @@ Le modèle final et les lignes d'entrée de l'outil, dans cet ordre :
 
 ```bash
 python 04_outils/fourchette_h7v4.py          # fourchette d'erreur, tirée du test 2025
-python 04_outils/modele_final_h7v4.py        # modèle final (appris sur toutes les années)
+python 04_outils/modele_final_h7v4.py        # modèle final (appris sur toutes les années) : écrit models/h7v4/, copie les deux fichiers lus par l'application
 python 04_outils/controle_lignes_2025.py     # contrôle de la construction des lignes sur 2025
 python 04_outils/produire_lignes_2026.py     # lignes d'entrée de 2026
+python 04_outils/produire_ventes_comparables.py   # ventes 2023-2025 pour les ventes comparables et la fourchette de l'outil
+python 04_outils/controle_estimer_2025.py    # contrôle de estimer() sur les ventes 2025 (comparaison avec la prévision naïve)
 ```
 
-`lignes_annee.py` n'est pas à lancer : il contient la construction des lignes, utilisée par les deux derniers scripts. `fourchette_h7v4.py`, `modele_final_h7v4.py` et `produire_lignes_2026.py` refusent d'écraser un fichier qu'ils ont déjà produit.
+`lignes_annee.py` n'est pas à lancer : il contient la construction des lignes, utilisée par `controle_lignes_2025.py`, `controle_estimer_2025.py` et `produire_lignes_2026.py`. `fourchette_h7v4.py`, `modele_final_h7v4.py`, `produire_lignes_2026.py` et `produire_ventes_comparables.py` refusent d'écraser un fichier qu'ils ont déjà produit.
+
+Scripts de support, lancés seulement si leur source change :
+
+```bash
+python 04_outils/preparer_communes_app.py          # tables des communes lues par la page Outil
+python 04_outils/preparer_eda_app.py               # fichiers lus par la page Exploration des données
+python 04_outils/produire_ref_trimestres_2025.py   # référence des trimestres 2025, lue par controle_lignes_2025.py
+```
+
+**Règle sur les données de l'application.** L'application n'a pas accès à `data/` : elle ne lit que fichiers de `05_application/donnees/`, versionnés dans Git. Chacun est produit par un script de `04_outils`, qui lit `data/processed/` et écrit dans ce dossier. On ne les modifie jamais à la main.
+
+#### Le modèle livré : `models/h7v4/`
+
+Le dossier contient le réseau H7v4 (`h7v4.keras`) et son fichier de paramètres (`h7v4_parametres.json` : préparation du bien, mise à l'échelle, table des sous-bassins, variables, réglages, fourchette d'erreur). Les deux vont ensemble. `MODEL_CARD.md` en est la fiche (ce que le modèle estime, ses limites, ses chiffres), générée à partir du fichier de paramètres par `04_outils/fiche_modele.py`. `SHA256SUMS` donne l'empreinte de chacun des deux fichiers ; pour vérifier qu'une copie est intacte :
+
+```bash
+cd models/h7v4 && sha256sum -c SHA256SUMS
+```
+
+Le modèle estime un bien, il ne prévoit pas le marché. Appris sur 2017-2025, il ne peut pas être jugé sur 2025 : le test de 2025 utilise le même réseau appris jusqu'en 2024 (`03_modelisation/4_evaluation_2025`). `modele_final_h7v4.py` refuse d'écraser un modèle déjà présent dans `models/h7v4/`.
+
+#### Mise à jour de DVF+
+
+`04_outils/mettre_a_jour_dvf.sh` récupère une nouvelle livraison du Cerema et la met au périmètre du projet. Il met à jour les données seulement : le modèle n'est pas réappris, ni les lignes d'entrée ni les ventes comparables régénérées.
+
+```bash
+bash 04_outils/mettre_a_jour_dvf.sh --help
+bash 04_outils/mettre_a_jour_dvf.sh tout archive_cerema.zip                  # extraire, assembler, filtrer
+bash 04_outils/mettre_a_jour_dvf.sh extraire archive_cerema.zip --annee 2026 --mois-max 6   # étape 1 seule (py7zr requis)
+bash 04_outils/mettre_a_jour_dvf.sh assembler                                # étape 2 seule
+bash 04_outils/mettre_a_jour_dvf.sh filtrer                                  # étape 3 seule
+```
+
+- `extraire` (`extraire_dvf_plus.py`) : lit les archives 7z de la livraison (dumps PostgreSQL) et extrait les mutations de l'année demandée ;
+- `assembler` : réunit les extraits des régions en un fichier `dvf_plus_assemble.csv` ;
+- `filtrer` (`filtrer_dvf_plus.py`) : exclut les DOM, retire les accolades des codes commune (`{33125}` devient `33125`) et applique le filtre du périmètre de `01_preparation/preparation.py` (vente d'un seul logement ancien, VEFA exclues). Il écrit `data/processed/dvf_plus_residentiel_<année>.parquet` et refuse d'écraser un fichier existant.
+
+Les fichiers intermédiaires sont rangés dans `data/raw/dvf_plus_maj/` (variable `DVF_MAJ_DOSSIER` pour changer de dossier) et ne sont jamais versionnés.
+
+#### Contrôle de vraisemblance 2026
+
+Les ventes de 2026 ne font pas partie du projet. Après une mise à jour de DVF+, elles ne servent qu'à une indication : comparer les estimations de H7v4 aux prix réellement constatés. Ce n'est pas un test (six mois de données seulement).
 
 ### 7. Application
 
@@ -363,6 +405,9 @@ Le prix N-1 du territoire, les variables « où » et le seuil de 20 ventes sont
 - Rapport de modélisation
 - Rapport final
 - Dépôt GitHub associé
+- Modèle H7v4 enregistré et documenté (`models/h7v4/`) et fonctions de l'outil
+
+L'application Streamlit est un démonstrateur, hors livrables.
 
 ## Équipe
 
