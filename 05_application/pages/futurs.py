@@ -114,7 +114,6 @@ PISTES = pd.DataFrame([
     ("Actualiser les données à chaque livraison semestrielle de DVF+",
      "Les données s'arrêtent à 2025 ; les caractéristiques du territoire vieillissent plus vite encore"),
     ("Juger le modèle sur une année jamais ouverte", "2025 a été lu trois fois ; trois années jugées seulement"),
-    ("Analyser le réseau retenu avec la méthode SHAP", "Son importance de variables n'est mesurée que par permutation"),
     ("Apprendre sur davantage de ventes", "Le modèle apprend sur environ une vente sur dix"),
     ("Corriger les comparaisons multiples",
      "De nombreux modèles comparés ; un gain proche du seuil de 3 % pourrait tenir au hasard"),

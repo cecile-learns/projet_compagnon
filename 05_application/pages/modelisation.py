@@ -234,7 +234,7 @@ chiffres = st.columns(3)
 chiffres[0].metric("Variables d'entrée", "35", "bien, territoire, « quand »", delta_color="off")
 chiffres[1].metric("Ventes d'apprentissage", "773 106", "2017 à 2025", delta_color="off")
 chiffres[2].metric("Sous-bassins connus", "1 810", "France métropolitaine hors Alsace-Moselle", delta_color="off")
-st.caption("Pour le test, le modèle est appris jusqu'en 2024 puis jugé sur 2025, ouverte une seule fois, avec un seul "
+st.caption("Pour le test, le modèle est appris jusqu'en 2024 puis jugé sur 2025, avec un seul "
            "candidat déclaré avant. Le modèle livré est réappris jusqu'en 2025.")
 
 # --- 3. La fiabilité --------------------------------------------------------
